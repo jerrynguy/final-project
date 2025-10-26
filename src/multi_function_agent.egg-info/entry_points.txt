@@ -1,0 +1,2 @@
+[nat.components]
+multi_function_agent = multi_function_agent.register

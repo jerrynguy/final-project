@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: multi_function_agent
+Version: 1.2.2.dev0+gc8a7f317e.d20250927
+Summary: Custom NeMo Agent Toolkit Workflow
+Classifier: Programming Language :: Python
+Requires-Python: <3.13,>=3.11
+Requires-Dist: nvidia-nat[langchain]

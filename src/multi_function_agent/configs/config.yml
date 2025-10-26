@@ -1,0 +1,108 @@
+general:
+  use_uvloop: true
+  logging:
+    console:
+      _type: console
+      level: INFO
+  telemetry:
+    enabled: false
+  front_end:
+    _type: console
+
+llms:
+  nim_llm:
+    _type: nim
+    model_name: meta/llama-3.1-70b-instruct
+    temperature: 0.0
+    max_tokens: 100
+
+# Robot Vision Function Configuration
+functions: 
+  robot_vision_controller:
+    _type: robot_vision_controller
+    stream_url: "rtsp://127.0.0.1:8554/robotcam"
+    control_mode: "autonomous"
+    navigation_goal: "explore"
+    safety_level: "medium"
+    max_speed: 0.6
+    description: "Real-time robot vision navigation and control system"
+    
+    # SLAM Configuration
+    use_lidar: true
+    lidar_topic: "/scan"
+    max_lidar_range: 3.5
+    min_valid_range: 0.12
+    critical_distance: 0.2
+    warning_distance: 0.4
+    safe_distance: 1.0
+    
+    # Robot Controller Configuration
+    min_command_interval: 0.05
+    connection_timeout: 3.0
+    max_linear_velocity: 0.6
+    max_angular_velocity: 2.5
+
+    # SLAM Map configuration
+    use_slam_map: true
+    map_topic: "/map"
+    exploration_radius: 3.0
+    min_frontier_size: 5
+    
+    # Nav2 Configuration
+    use_nav2: true                    # Enable Nav2 navigation
+    nav2_timeout: 60.0                # Navigation timeout (seconds)
+    nav2_goal_tolerance: 0.2          # Goal position tolerance (meters)
+    nav2_angle_tolerance: 0.1         # Goal orientation tolerance (radians)
+    nav2_fallback_to_manual: true     # Fallback to manual control if Nav2 fails
+    # ======================================================
+
+    prompt: |
+      You are an advanced robot navigation AI that controls a TurtleBot3 using real-time camera vision.
+      
+      Your primary objectives:
+      1. SAFETY FIRST - Never compromise robot or environment safety
+      2. REAL-TIME PERFORMANCE - Make decisions within 50ms
+      3. OBSTACLE AVOIDANCE - Detect and avoid all obstacles
+      4. EFFICIENT NAVIGATION - Find optimal paths while exploring
+      
+      CONTROL MODES:
+      - autonomous: Full autonomous navigation and obstacle avoidance
+      
+      NAVIGATION GOALS:
+      - explore: Autonomous exploration while avoiding obstacles
+      - goto_target: Navigate to specific coordinates or visual targets
+      - follow_path: Follow predetermined path with obstacle avoidance
+      - avoid_obstacles: Pure reactive obstacle avoidance behavior
+      
+      SAFETY LEVELS:
+      - high: Very conservative speeds and large safety margins (indoor use)
+      - medium: Balanced speed and safety for general navigation
+      - low: Higher speeds with smaller margins (experienced users only)
+      
+      REAL-TIME CONSTRAINTS:
+      • Vision analysis must complete within 50ms per frame
+      • Navigation decisions must complete within 5ms
+      • Emergency stops must execute within 100ms
+      • All responses must be actionable robot commands
+      
+      RESPONSE FORMAT for robot control:
+      Always provide structured navigation commands, not conversational responses.
+      Focus on immediate actionable decisions: move forward, turn left, stop, etc.
+      
+      CRITICAL SAFETY RULES:
+      • Stop immediately if safety score < 3/10
+      • Slow down if obstacles detected within 0.8m
+      • Emergency stop if obstacles within 0.3m
+      • Never exceed configured velocity limits
+      • Always validate commands before execution
+
+workflow:
+  _type: react_agent
+  tool_names:
+    - robot_vision_controller
+  llm_name: nim_llm
+  verbose: false
+  retry_parsing_errors: true
+  max_retries: 5
+  max_iterations: 20
+  recursion_limit: 30
