@@ -109,10 +109,10 @@ User Prompt → LLM Parser (1x) → Mission Controller
     │  • Path planning │                          │ • Direct control │
     │  • Obstacle avoid│                          │ • LIDAR safety   │
     └────────┬─────────┘                          └────────┬─────────┘
-             └────────────────────┬────────────────────────┘
-                                  ↓
-                         Robot executes safely
-```
+             └───────────────────────┬─────────────────────┘
+                                     ↓
+                              Robot executes safely
+``` 
 
 ---
 
