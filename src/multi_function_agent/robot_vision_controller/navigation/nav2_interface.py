@@ -80,6 +80,7 @@ class Nav2Interface(Node):
         # Navigation state
         self.state = NavigationState.IDLE
         self.current_goal = None
+        self.current_goal_handle = None
         self.navigation_result = None
         
         # Action client for NavigateToPose
@@ -135,7 +136,7 @@ class Nav2Interface(Node):
         if self.state == NavigationState.NAVIGATING:
             logger.warning("Already navigating - cancelling current goal")
             self.cancel_navigation()
-            time.sleep(0.5)
+            time.sleep(0.2)
         
         # Create goal message
         goal_msg = NavigateToPose.Goal()
@@ -150,7 +151,7 @@ class Nav2Interface(Node):
         )
         
         # Wait for goal acceptance
-        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=5.0)
+        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=2.0)
         
         goal_handle = send_goal_future.result()
         
@@ -162,6 +163,7 @@ class Nav2Interface(Node):
         logger.info("✅ Goal accepted by Nav2")
         self.state = NavigationState.NAVIGATING
         self.current_goal = (x, y, theta)
+        self.current_goal_handle = goal_handle
         
         # Register result callback
         result_future = goal_handle.get_result_async()
@@ -177,16 +179,19 @@ class Nav2Interface(Node):
             logger.warning("No active navigation to cancel")
             return False
         
+        if not self.current_goal_handle:
+            logger.error("No goal handle available for cancellation")
+            return False
+        
         logger.warning("🛑 Cancelling navigation")
         
         # Cancel via action client
-        cancel_future = self.nav_to_pose_client._cancel_goal_async(
-            self.current_goal
-        )
+        cancel_future = self.nav_to_pose_client._cancel_goal_async()
         
-        rclpy.spin_until_future_complete(self, cancel_future, timeout_sec=2.0)
+        rclpy.spin_until_future_complete(self, cancel_future, timeout_sec=1.0)
         
         self.state = NavigationState.CANCELLED
+        self.current_goal_handle = None
         logger.info("Navigation cancelled")
         
         return True
@@ -246,20 +251,21 @@ class Nav2Interface(Node):
         result = future.result()
         
         if result.status == 4:  # SUCCEEDED
-            logger.info("✅ Navigation SUCCEEDED")
+            logger.info("Navigation SUCCEEDED")
             self.state = NavigationState.SUCCEEDED
             
             if self.goal_reached_callback:
                 self.goal_reached_callback()
         
         else:
-            logger.warning(f"❌ Navigation FAILED (status: {result.status})")
+            logger.warning(f"Navigation FAILED (status: {result.status})")
             self.state = NavigationState.FAILED
             
             if self.goal_failed_callback:
                 self.goal_failed_callback(result.status)
         
         self.navigation_result = result
+        self.current_goal_handle = None
     
     def _path_callback(self, msg: Path): # type: ignore
         """Handle planned path updates from Nav2."""

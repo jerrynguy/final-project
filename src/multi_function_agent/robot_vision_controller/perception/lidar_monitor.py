@@ -223,18 +223,12 @@ class LidarSafetyMonitor:
         safety_override = self.check_safety(lidar_data)
         
         if safety_override['veto']:
-            logger.warning("[SAFETY VETO] Executing escape command")
+            logger.warning(f"[SAFETY VETO] {safety_override['reason']}")
             
-            # Execute escape command (BLOCKING until complete)
-            success = await robot_interface.execute_command(safety_override['command'])
-            
-            if success:
-                results["commands_sent"].append(safety_override['command'])
-            
-            # Wait for escape to complete before next iteration
-            escape_duration = safety_override['command'].get('parameters', {}).get('duration', 0.2)
-            await asyncio.sleep(escape_duration)
-            
-            return True  # Signal to skip to next iteration
-        
-        return False  # Safe to continue
+            return {
+                'veto': True,
+                'command': safety_override['command'],
+                'reason': safety_override['reason']
+            }
+
+        return {'veto': False, 'command': None, 'reason': 'safe'}

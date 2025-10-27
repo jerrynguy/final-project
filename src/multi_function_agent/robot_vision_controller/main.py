@@ -247,6 +247,7 @@ def _mission_directive_to_nav2_goal(
 ) -> Optional[Tuple[float, float, float]]:
     """
     Convert mission directive to Nav2 goal (x, y, theta).
+    Uses proper coordinate transformation from robot frame to map frame.
     """
     if robot_pos is None:
         logger.warning("No robot position for Nav2 goal")
@@ -254,54 +255,47 @@ def _mission_directive_to_nav2_goal(
     
     current_x = robot_pos['x']
     current_y = robot_pos['y']
+    current_theta = robot_pos.get('theta', 0.0)
     
-    # Tracking directives - relative goals
+    import numpy as np
+    
+    def relative_to_absolute(distance: float, angle_offset: float = 0.0):
+        """Transform relative (distance, angle_offset) to absolute (x, y, theta)."""
+        target_theta = current_theta + angle_offset
+        goal_x = current_x + distance * np.cos(target_theta)
+        goal_y = current_y + distance * np.sin(target_theta)
+        return (goal_x, goal_y, target_theta)
+    
+    # Tracking directives
     if directive == 'track_follow':
-        # Move 1m forward in predicted direction
-        target_info = vision_analysis.get('target_tracking', {})
-        direction = target_info.get('direction', 'forward')
-        
-        if direction == 'left':
-            return (current_x, current_y + 1.0, 1.57)  # +90°
-        elif direction == 'right':
-            return (current_x, current_y - 1.0, -1.57)  # -90°
-        else:  # forward
-            return (current_x + 1.0, current_y, 0.0)
+        return relative_to_absolute(1.0, 0.0)
     
     elif directive == 'track_approach':
-        # Move 0.5m forward
-        return (current_x + 0.5, current_y, 0.0)
+        return relative_to_absolute(0.5, 0.0)
     
     elif directive.startswith('track_search_'):
-        # Search patterns
         search_dir = directive.split('_')[-1]
         
         if search_dir == 'left':
-            return (current_x, current_y + 1.5, 1.57)
+            return relative_to_absolute(1.5, np.pi/2)
         elif search_dir == 'right':
-            return (current_x, current_y - 1.5, -1.57)
+            return relative_to_absolute(1.5, -np.pi/2)
         elif search_dir == 'forward':
-            return (current_x + 1.5, current_y, 0.0)
-        # 'spin' handled by manual control
+            return relative_to_absolute(1.5, 0.0)
+        return None
     
-    # Patrol directives - arc navigation
+    # Patrol directives
     elif directive.startswith('patrol_'):
-        # Circular patrol: move forward with arc
-        return (current_x + 1.0, current_y + 0.3, 0.2)  # Slight curve
+        return relative_to_absolute(1.0, 0.3)
     
-    # Exploration - random waypoint
+    # Exploration
     elif directive.startswith('explore_'):
         import random
-        # Random goal within 2m radius
-        angle = random.uniform(0, 2 * 3.14159)
-        distance = random.uniform(1.0, 2.0)
-        
-        goal_x = current_x + distance * np.cos(angle)
-        goal_y = current_y + distance * np.sin(angle)
-        
-        return (goal_x, goal_y, angle)
+        angle_offset = random.uniform(-np.pi, np.pi)
+        distance = random.uniform(2.0, 3.0)
+        return relative_to_absolute(distance, angle_offset)
     
-    # Directives that need manual control (backup, stop, spin)
+    # Manual-only directives
     return None
 
 # =============================================================================
@@ -340,7 +334,9 @@ async def run_robot_control_loop(
     logger.info(f"[MISSION] Started: {mission_controller.mission.description}")
     
     iteration = 0
-    
+    last_vision_update = 0
+    cached_vision_analysis = None
+
     while max_iterations is None or iteration < max_iterations:
         try:
             # Get latest camera frame
@@ -351,41 +347,69 @@ async def run_robot_control_loop(
             
             iteration += 1
             PerformanceLogger.log_iteration_start(iteration)
+
+            # ============================================================
+            # PRIORITY 0: ABORT NAV2 IF CRITICAL (NON-BLOCKING CHECK)
+            # ============================================================
+            if nav2_ready and robot_interface.nav2_interface:
+                if robot_interface.nav2_interface.is_navigating():
+                    safe = robot_interface.check_nav2_safety()
+                    if not safe:
+                        logger.warning("[NAV2 ABORTED] Safety override")
+                        results["navigation_decisions"].append({
+                            'action': 'abort_nav2',
+                            'reason': 'safety_critical'
+                        })
+                        continue
             
             # ============================================================
             # PRIORITY 1: SAFETY CHECK (BLOCKING) - REFACTORED
             # ============================================================
             lidar_data = robot_interface.lidar_data
-            should_skip = await safety_monitor.handle_safety_override(
-                lidar_data,
-                robot_interface,
-                results
+            safety_result = await safety_monitor.handle_safety_override(
+                lidar_data, robot_interface, results
             )
             
-            if should_skip:
-                continue  # Safety override executed, skip to next iteration
-            
+            if safety_result['veto']:
+                # Execute escape NON-BLOCKING
+                asyncio.create_task(
+                    robot_interface.execute_command(safety_result['command'])
+                )
+                results["commands_sent"].append(safety_result['command'])
+                
+                # Continue immediately
+                await asyncio.sleep(0.05)
+                continue
+
             # ============================================================
             # PRIORITY 2: VISION ANALYSIS - REFACTORED
             # ============================================================
-            mission = mission_controller.mission
-            vision_analysis = await vision_analyzer.analyze_with_mission(
-                frame,
-                processor,
-                model,
-                navigation_goal,
-                mission_type=mission.type,
-                target_class=mission.target_class if hasattr(mission, 'target_class') else None
-            )
+            current_time = time.time()
             
-            # Extract detected objects and log
-            detected_objects = vision_analysis.get('detected_objects', [])
-            if detected_objects:
-                PerformanceLogger.log_mission_status(
-                    mission.type,
-                    len(detected_objects),
-                    mission.target_class if hasattr(mission, 'target_class') else None
+            # Only run YOLO at 2Hz (every 0.5s)
+            if (cached_vision_analysis is None or 
+                current_time - last_vision_update > 0.5):
+                
+                mission = mission_controller.mission
+                vision_analysis = await vision_analyzer.analyze_with_mission(
+                    frame, processor, model, navigation_goal,
+                    mission_type=mission.type,
+                    target_class=mission.target_class if hasattr(mission, 'target_class') else None
                 )
+                
+                cached_vision_analysis = vision_analysis
+                last_vision_update = current_time
+                
+                detected_objects = vision_analysis.get('detected_objects', [])
+                if detected_objects:
+                    PerformanceLogger.log_mission_status(
+                        mission.type, len(detected_objects),
+                        mission.target_class if hasattr(mission, 'target_class') else None
+                    )
+            else:
+                # Use cached analysis
+                vision_analysis = cached_vision_analysis
+                detected_objects = vision_analysis.get('detected_objects', [])
             
             obstacles = vision_analysis.get("obstacles", [])
             PerformanceLogger.log_vision_analysis(vision_analysis, obstacles)
@@ -398,7 +422,8 @@ async def run_robot_control_loop(
             if hasattr(robot_interface, 'robot_status'):
                 robot_pos = {
                     'x': robot_interface.robot_status.position_x,
-                    'y': robot_interface.robot_status.position_y
+                    'y': robot_interface.robot_status.position_y,
+                    'theta': getattr(robot_interface.robot_status, 'theta', 0.0)
                 }
             
             frame_info = {
@@ -427,9 +452,14 @@ async def run_robot_control_loop(
             logger.info(f"[MISSION] Directive: {mission_directive}")
 
             # Determine if we can use Nav2 for this directive
-            use_nav2_for_directive = nav2_ready and robot_pos is not None
+            can_use_nav2 = (
+                nav2_ready and 
+                robot_pos is not None and
+                robot_interface.nav2_interface and
+                not robot_interface.nav2_interface.is_navigating()
+            )
 
-            if use_nav2_for_directive:
+            if can_use_nav2:
                 # Try to convert directive to Nav2 goal
                 nav2_goal = _mission_directive_to_nav2_goal(
                     mission_directive,
@@ -465,14 +495,14 @@ async def run_robot_control_loop(
                         logger.info(f"[NAV2] State: {nav2_state}")
                         
                         # Continue loop - Nav2 handles execution
-                        await asyncio.sleep(0.5)  # Longer interval for Nav2
+                        await asyncio.sleep(0.1)  # Longer interval for Nav2
                         continue
                     else:
                         logger.warning("[NAV2] Goal rejected - falling back to manual")
-                        use_nav2_for_directive = False
+                        can_use_nav2 = False
 
             # Fallback to manual control if Nav2 not used
-            if not use_nav2_for_directive or not nav2_goal:
+            if not can_use_nav2 or not nav2_goal:
                 logger.info("[MANUAL] Using manual navigation")
                 
                 # Original manual navigation logic

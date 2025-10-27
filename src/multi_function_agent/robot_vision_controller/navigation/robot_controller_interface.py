@@ -21,6 +21,7 @@ try:
     from sensor_msgs.msg import LaserScan
     from nav_msgs.msg import OccupancyGrid
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from tf_transformations import euler_from_quaternion
     
     ROS_AVAILABLE = True
     
@@ -118,6 +119,7 @@ class RobotStatus:
     position_y: float = 0.0
     is_ready: bool = False
     last_update: float = 0.0
+    theta: float = 0.0
     error_message: str = ""
 
 
@@ -478,57 +480,34 @@ class RobotControllerInterface(Node):
             
             logger.info(f"Nav2 goal sent: ({x:.2f}, {y:.2f}, {theta:.2f}rad)")
             
-            # If blocking, wait for completion
-            if blocking:
-                return await self._wait_for_nav2_completion()
-            
             return True
             
         except Exception as e:
             logger.error(f"Failed to send Nav2 goal: {e}")
             return False
-
-    async def _wait_for_nav2_completion(self, timeout: float = 60.0) -> bool:
-        """
-        Wait for Nav2 navigation to complete.
-        """
-        import asyncio
         
-        start_time = time.time()
+    def check_nav2_safety(self) -> bool:
+        """Check Nav2 safety NON-BLOCKING."""
+        if not self.use_nav2 or not self.nav2_interface:
+            return True
         
-        while time.time() - start_time < timeout:
-            # Spin ROS2 to process callbacks
-            import rclpy
-            rclpy.spin_once(self.nav2_interface, timeout_sec=0.1)
-            
-            state = self.nav2_interface.get_state()
-            
-            if state == NavigationState.SUCCEEDED:
-                logger.info("✅ Nav2 navigation succeeded")
-                return True
-            
-            elif state in [NavigationState.FAILED, NavigationState.CANCELLED]:
-                logger.warning(f"❌ Nav2 navigation {state.value}")
-                return False
-            
-            # Check LIDAR safety during navigation
-            if self.lidar_data is not None:
-                from multi_function_agent.robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
-                safety_monitor = LidarSafetyMonitor()
-                
-                min_dist = safety_monitor.get_min_distance(self.lidar_data)
-                
-                # Emergency abort if critical
-                if min_dist < safety_monitor.CRITICAL_DISTANCE:
-                    logger.error(f"[SAFETY ABORT] Obstacle at {min_dist:.2f}m during Nav2")
-                    self.cancel_nav2_navigation()
-                    return False
-            
-            await asyncio.sleep(0.1)
+        if not self.nav2_interface.is_navigating():
+            return True
         
-        logger.error("Nav2 navigation timeout")
-        self.cancel_nav2_navigation()
-        return False
+        if self.lidar_data is None:
+            return True
+        
+        from multi_function_agent.robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
+        safety_monitor = LidarSafetyMonitor()
+        
+        min_dist = safety_monitor.get_min_distance(self.lidar_data)
+        
+        if min_dist < safety_monitor.CRITICAL_DISTANCE:
+            logger.error(f"[ABORT NAV2] Obstacle at {min_dist:.2f}m")
+            self.cancel_nav2_navigation()
+            return False
+        
+        return True
     
     def cancel_nav2_navigation(self) -> bool:
         """
@@ -715,6 +694,12 @@ class RobotControllerInterface(Node):
         try:
             self.robot_status.position_x = msg.pose.pose.position.x
             self.robot_status.position_y = msg.pose.pose.position.y
+
+            from tf_transformations import euler_from_quaternion
+
+            q = msg.pose.pose.orientation
+            _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+            self.robot_status.theta = yaw
             
             self.robot_status.last_update = time.time()
             
