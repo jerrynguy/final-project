@@ -197,6 +197,22 @@ class RobotControllerInterface(Node):
 
         self.use_nav2 = False
         self.nav2_interface = None
+
+        if ROS_AVAILABLE and NAV2_AVAILABLE:
+            try:
+                # Initialize ROS2 context if not already
+                if not rclpy.ok():
+                    rclpy.init(args=None)
+                
+                # Try to initialize Nav2Interface
+                self.nav2_interface = Nav2Interface()
+                self.use_nav2 = True
+                logger.info("Bridge mode WITH Nav2 enabled (hybrid architecture)")
+            except Exception as e:
+                logger.warning(f"Nav2 init failed in bridge mode: {e}")
+                self.use_nav2 = False
+        else:
+            logger.info("Nav2 not available - bridge mode manual-only")
         
         # Start LiDAR polling thread
         if self.is_connected:
@@ -209,6 +225,8 @@ class RobotControllerInterface(Node):
         Start background thread for polling LiDAR data from bridge.
         """
         def poll_loop():
+            consecutive_failures = 0
+            last_success_log = 0
             while True:
                 try:
                     response = requests.get(
@@ -220,16 +238,35 @@ class RobotControllerInterface(Node):
                         result = response.json()
                         data = result.get('data')
                         
-                        if data:
+                        if data and 'ranges' in data:
                             self.lidar_data = self._convert_to_laserscan(data)
-                            logger.debug(f"Lidar updated: {len(self.lidar_data.ranges)} rays")
+                            consecutive_failures = 0
+                            
+                            # Log success every 50 updates
+                            current_time = time.time()
+                            if current_time - last_success_log > 5.0:
+                                logger.info(f"✅ LIDAR active: {len(self.lidar_data.ranges)} rays, "
+                                        f"min={min(self.lidar_data.ranges):.2f}m")
+                                last_success_log = current_time
+                        else:
+                            consecutive_failures += 1
+                            if consecutive_failures == 1:
+                                logger.warning("⚠️  LIDAR data empty from bridge")
                     else:
-                        logger.debug("Waiting for lidar data from bridge...")
-                        
+                        consecutive_failures += 1
+                        if consecutive_failures == 1:
+                            logger.warning(f"⚠️  Bridge returned status {response.status_code}")
+                            
                 except Exception as e:
-                    logger.debug(f"Lidar polling error: {e}")
+                    consecutive_failures += 1
+                    if consecutive_failures == 1:
+                        logger.error(f"❌ Lidar polling error: {e}")
                 
-                time.sleep(0.1)  # 10Hz polling rate
+                # Exponential backoff on failures
+                if consecutive_failures > 10:
+                    time.sleep(1.0)
+                else:
+                    time.sleep(0.1)  # 10Hz polling rate
         
         thread = threading.Thread(target=poll_loop, daemon=True)
         thread.start()
@@ -445,14 +482,18 @@ class RobotControllerInterface(Node):
         
         logger.info("Waiting for Nav2 to be ready...")
         
+        # BRIDGE MODE: Nav2 uses native ROS2, not bridge
+        if self.use_bridge:
+            logger.info("Bridge mode: Nav2 uses native ROS2 interface")
+        
         # Wait for Nav2 action server
         ready = self.nav2_interface.wait_for_nav2(timeout=timeout)
         
         if ready:
-            logger.info("Nav2 is ready")
+            logger.info("✅ Nav2 is ready")
             return True
         else:
-            logger.error("Nav2 timeout - falling back to manual control")
+            logger.error("❌ Nav2 timeout - falling back to manual control")
             self.use_nav2 = False
             return False
         

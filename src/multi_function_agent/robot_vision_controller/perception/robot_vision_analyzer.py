@@ -1,14 +1,12 @@
 """
 Robot Vision Analyzer Module
-Fast vision analysis pipeline combining spatial detection and minimal VLM queries.
+Fast vision analysis pipeline using LIDAR spatial detection + YOLO (BLIP2 removed).
 """
 
 import cv2
 import time
-import torch
 import logging
 import numpy as np
-from PIL import Image
 from typing import Dict, List, Optional
 
 from ultralytics import YOLO
@@ -27,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 class RobotVisionAnalyzer:
     """
-    Fast vision analysis pipeline for robot navigation.
+    Fast vision analysis pipeline for robot navigation (YOLO + LIDAR only).
     """
     
     def __init__(self, robot_controller=None):
@@ -37,9 +35,6 @@ class RobotVisionAnalyzer:
         # Caching for performance
         self._frame_cache = None
         self._last_analysis_time = 0
-        self._last_vision_query_time = 0
-        self._vision_query_interval = 2.0
-        self._cached_vision_result = None
         self._min_analysis_interval = 0.1
         
         # Core components
@@ -58,97 +53,23 @@ class RobotVisionAnalyzer:
         self.yolo_model = None
         self._yolo_initialized = False
     
-    async def _minimal_vision_query(
-        self,
-        frame: np.ndarray,
-        processor,
-        model,
-        navigation_goal: str,
-        spatial_analysis: Dict
-    ) -> Dict[str, str]:
-        """
-        Execute minimal VLM query with intelligent caching.
-        """
-        current_time = time.time()
-        
-        # Use cache if recent
-        if (self._cached_vision_result is not None and
-            current_time - self._last_vision_query_time < self._vision_query_interval):
-            logger.debug(f"Using cached vision result (age: {current_time - self._last_vision_query_time:.1f}s)")
-            return self._cached_vision_result
-        
-        # Skip inference for clearly safe paths
-        if spatial_analysis.get('safety_score', 0) >= 8 and 'center' in spatial_analysis.get('clear_paths', []):
-            logger.debug("Clear path detected, skipping model inference")
-            return {
-                'vision_instruction': 'move forward safely',
-                'model_confidence': 0.9,
-            }
-        
-        # Prepare input for VLM
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(frame_rgb)
-        pil_image = pil_image.resize((128, 128))  # Fast resize
-        
-        prompt = f"Goal: {navigation_goal}"
-        
-        # Run VLM inference
-        device = next(model.parameters()).device
-        inputs = processor(pil_image, prompt, return_tensors="pt").to(device)
-        
-        with torch.no_grad():
-            generated_ids = model.generate(
-                **inputs,
-                max_length=100,
-                max_new_tokens=50,
-                num_beams=2,
-                do_sample=False,
-                early_stopping=True,
-                pad_token_id=processor.tokenizer.eos_token_id,
-                use_cache=True,
-            )
-        
-        result = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        
-        # Clean up result
-        if prompt in result:
-            result = result.replace(prompt, "").strip()
-        
-        navigation_instruction = result.split('.')[0][:100]
-        
-        # Cache result
-        self._last_vision_query_time = current_time
-        
-        self._cached_vision_result = {
-            'vision_instruction': navigation_instruction,
-            'model_confidence': 0.8,
-        }
-        
-        return self._cached_vision_result
-    
     def _merge_analysis_results(
         self,
         spatial: Dict,
-        vision: Dict,
         goal: str
     ) -> Dict[str, any]:
         """
-        Merge spatial and vision analysis into unified result.
+        Merge spatial analysis into unified result (no BLIP2 needed).
         """
         return {
             'obstacles': spatial['obstacles'],
             'clear_paths': spatial['clear_paths'],
             'safety_score': spatial['safety_score'],
             'recommended_direction': spatial['recommended_direction'],
-            'vision_instruction': vision.get('vision_instruction', 'continue straight'),
-            'model_confidence': vision.get('model_confidence', 0.5),
-            'overall_confidence': min(
-                spatial['spatial_confidence'],
-                vision.get('model_confidence', 0.5)
-            ),
+            'overall_confidence': spatial['spatial_confidence'],
             'immediate_action': self.navigation_reasoner._determine_immediate_action(
                 spatial,
-                vision,
+                {},  # No vision context needed
                 goal
             ),
             'navigation_priority': 'safety_first',
@@ -163,7 +84,6 @@ class RobotVisionAnalyzer:
             'clear_paths': ['center'],
             'safety_score': 5,
             'recommended_direction': 'center',
-            'vision_instruction': 'continue',
             'immediate_action': 'move_forward',
             'processing_time_ms': 0.1,
             'cached': True
@@ -325,12 +245,10 @@ class RobotVisionAnalyzer:
     async def analyze_for_navigation(
         self,
         frame: np.ndarray,
-        processor,
-        model,
         navigation_goal: str
     ) -> Dict[str, any]:
         """
-        Fast vision analysis pipeline for navigation decisions.
+        Fast vision analysis pipeline for navigation decisions (LIDAR spatial only).
         """
         current_time = time.time()
         
@@ -347,8 +265,6 @@ class RobotVisionAnalyzer:
             
             # Step 2: Gather sensor data from robot controller
             lidar_scan = None
-            map_data = None
-            robot_position = None
             
             if self.robot_controller:
                 if hasattr(self.robot_controller, 'lidar_data'):
@@ -364,19 +280,9 @@ class RobotVisionAnalyzer:
                 lidar_scan=lidar_scan,
             )
             
-            # Step 4: Minimal VLM query for context
-            vision_analysis = await self._minimal_vision_query(
-                preprocessed_frame,
-                processor,
-                model,
-                navigation_goal,
-                spatial_analysis
-            )
-            
-            # Step 5: Merge results
+            # Step 4: Merge results (no BLIP2 vision query needed)
             final_analysis = self._merge_analysis_results(
                 spatial_analysis,
-                vision_analysis,
                 navigation_goal
             )
             
@@ -384,38 +290,34 @@ class RobotVisionAnalyzer:
             processing_time = (time.time() - start_time) * 1000
             final_analysis['processing_time_ms'] = processing_time
             
-            logger.debug(f"Robot vision analysis completed in {processing_time:.1f}ms")
+            logger.debug(f"Spatial analysis completed in {processing_time:.1f}ms")
             
             self._last_analysis_time = current_time
             
             return final_analysis
             
         except Exception as e:
-            logger.error(f"Fast analysis failed: {e}")
+            logger.error(f"Spatial analysis failed: {e}")
             return self.safety_validator._get_safe_fallback_analysis()
         
     # Integrated mission-aware analysis
     async def analyze_with_mission(
         self,
         frame: np.ndarray,
-        processor,
-        model,
         navigation_goal: str,
         mission_type: str = None,
         target_class: str = None
     ) -> Dict:
         """
-        Unified vision analysis with mission-specific detection.
+        Unified vision analysis with mission-specific detection (YOLO only).
         """
-        # Standard navigation analysis
+        # Standard navigation analysis (LIDAR spatial)
         vision_analysis = await self.analyze_for_navigation(
             frame,
-            processor,
-            model,
             navigation_goal
         )
         
-        # Add mission-specific detection
+        # Add mission-specific YOLO detection
         detected_objects = []
         if mission_type in ['count_objects', 'follow_target', 'avoid_target'] and target_class:
             detected_objects = self.detect_target_objects(frame, target_class)

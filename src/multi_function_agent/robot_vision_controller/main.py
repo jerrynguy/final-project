@@ -36,7 +36,7 @@ from multi_function_agent.robot_vision_controller.core.mission_controller import
 from multi_function_agent.robot_vision_controller.core.models import (
     get_robot_vision_model_manager,
     preload_robot_vision_model,
-    is_model_ready,
+    is_yolo_ready,
 )
 from aiq.builder.builder import Builder # type: ignore
 from aiq.builder.function_info import FunctionInfo # type: ignore
@@ -135,10 +135,8 @@ async def robot_vision_controller(
         logger.info(f"Starting robot vision control: {stream_url}")
         logger.info(f"Control mode: {control_mode}, Goal: {navigation_goal}, Safety: {safety_level}")
         
-        # Load vision model
-        start_time = time.time()
-        processor, model = model_manager.get_model()
-        logger.info(f"Robot vision model retrieved in {time.time() - start_time:.4f} seconds")
+        # CHANGED: Removed BLIP2 model loading
+        logger.info("Using YOLO-only vision pipeline (BLIP2 removed)")
         
         # Initialize ROS2 if available
         if ROS_AVAILABLE and not rclpy.ok():
@@ -171,24 +169,22 @@ async def robot_vision_controller(
         if not connection_success:
             logger.warning("Could not connect to robot controller")
         
-        # REFACTORED: Parse mission using MissionController.from_prompt()
+        # Parse mission using MissionController.from_prompt()
         user_prompt = builder._workflow_builder.general_config.front_end.input_query[0]
         mission_controller = await MissionController.from_prompt(user_prompt, builder)
         
-        # Run main control loop
+        # CHANGED: Removed processor, model parameters
         control_start_time = time.time()
         control_results = await run_robot_control_loop(
             stream_url,
             vision_analyzer,
             navigation_reasoner,
             robot_interface,
-            processor,
-            model,
             navigation_goal,
             safety_validator,
             safety_monitor,
             mission_controller,
-            nav2_ready = nav2_ready,
+            nav2_ready=nav2_ready,
             max_iterations=None,
         )
         
@@ -235,7 +231,7 @@ async def robot_vision_controller(
         logger.error(f"Error in robot vision control: {e}")
         
         yield FunctionInfo.from_fn(
-            ErrorHandlers.control_error(e, stream_url, is_model_ready()),
+            ErrorHandlers.control_error(e, stream_url, is_yolo_ready()),
             description="Robot control failed"
         )
         return
@@ -306,8 +302,6 @@ async def run_robot_control_loop(
     vision_analyzer: RobotVisionAnalyzer,
     navigation_reasoner: NavigationReasoner,
     robot_interface: RobotControllerInterface,
-    processor,
-    model,
     navigation_goal: str,
     safety_validator: SafetyValidator,
     safety_monitor: LidarSafetyMonitor,
@@ -348,9 +342,7 @@ async def run_robot_control_loop(
             iteration += 1
             PerformanceLogger.log_iteration_start(iteration)
 
-            # ============================================================
             # PRIORITY 0: ABORT NAV2 IF CRITICAL (NON-BLOCKING CHECK)
-            # ============================================================
             if nav2_ready and robot_interface.nav2_interface:
                 if robot_interface.nav2_interface.is_navigating():
                     safe = robot_interface.check_nav2_safety()
@@ -362,9 +354,7 @@ async def run_robot_control_loop(
                         })
                         continue
             
-            # ============================================================
-            # PRIORITY 1: SAFETY CHECK (BLOCKING) - REFACTORED
-            # ============================================================
+            # PRIORITY 1: SAFETY CHECK (BLOCKING)
             lidar_data = robot_interface.lidar_data
             safety_result = await safety_monitor.handle_safety_override(
                 lidar_data, robot_interface, results
@@ -381,9 +371,7 @@ async def run_robot_control_loop(
                 await asyncio.sleep(0.05)
                 continue
 
-            # ============================================================
-            # PRIORITY 2: VISION ANALYSIS - REFACTORED
-            # ============================================================
+            # PRIORITY 2: VISION ANALYSIS 
             current_time = time.time()
             
             # Only run YOLO at 2Hz (every 0.5s)
@@ -392,7 +380,8 @@ async def run_robot_control_loop(
                 
                 mission = mission_controller.mission
                 vision_analysis = await vision_analyzer.analyze_with_mission(
-                    frame, processor, model, navigation_goal,
+                    frame, 
+                    navigation_goal,
                     mission_type=mission.type,
                     target_class=mission.target_class if hasattr(mission, 'target_class') else None
                 )
@@ -415,9 +404,7 @@ async def run_robot_control_loop(
             PerformanceLogger.log_vision_analysis(vision_analysis, obstacles)
             results["obstacles_detected"].extend(obstacles)
             
-            # ============================================================
-            # PRIORITY 3: MISSION STATE UPDATE - REFACTORED
-            # ============================================================
+            # PRIORITY 3: MISSION STATE UPDATE 
             robot_pos = None
             if hasattr(robot_interface, 'robot_status'):
                 robot_pos = {
@@ -431,7 +418,7 @@ async def run_robot_control_loop(
                 'height': frame.shape[0]
             } if frame is not None else None
             
-            # REFACTORED: Use process_frame() for unified update
+            # Use process_frame() for unified update
             mission_result = mission_controller.process_frame(
                 detected_objects=detected_objects,
                 robot_pos=robot_pos,
@@ -444,10 +431,8 @@ async def run_robot_control_loop(
                 logger.info(f"Progress: {mission_result['state']}")
                 results["final_status"] = "mission_completed"
                 break
-            
-            # ============================================================
+
             # PRIORITY 4: NAVIGATION DECISION - HYBRID NAV2/MANUAL
-            # ============================================================
             mission_directive = mission_result['directive']
             logger.info(f"[MISSION] Directive: {mission_directive}")
 
