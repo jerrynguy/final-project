@@ -561,22 +561,11 @@ nat run --config_file examples/multi_function_agent/configs/config.yml --input "
 - **Adaptive Navigation**: Hybrid Nav2/Manual based on directive
 - **Real-time Tracking**: YOLO bbox center + distance estimation
 
-### Performance Characteristics
-
-| Metric | Value | Note |
-|--------|-------|------|
-| **Iteration rate** | 10 Hz | 100ms per loop |
-| **YOLO inference** | 50ms | Cached 0.5s |
-| **LIDAR processing** | 10ms | Every iteration |
-| **Navigation decision** | 5ms | Rule-based |
-| **Memory usage** | ~2GB | YOLO + Nav2 |
-| **Startup time** | ~5s | Models + ROS2 |
-
 ### Limitations
 
 **Technical Constraints:**
 - **YOLO Classes**: Limited to 80 COCO classes
-- **Distance Estimation**: Heuristic from bbox size + LIDAR
+- **Distance Accuracy**: LiDAR-fused (±5cm), fallback heuristic when out of LiDAR range (0.12-3.5m)
 - **Lap Detection**: Simple odometry-based (no SLAM loop closure)
 - **LLM Dependency**: Requires NIM API for prompt parsing
 - **Single Robot**: No multi-robot coordination

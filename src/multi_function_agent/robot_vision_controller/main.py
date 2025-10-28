@@ -144,12 +144,12 @@ async def robot_vision_controller(
             rclpy.init(args=None)
         
         # Initialize core components
-        vision_analyzer = RobotVisionAnalyzer()
         navigation_reasoner = NavigationReasoner(
             safety_level=safety_level, 
             max_speed=robot_config["max_speed"]
         )
         robot_interface = RobotControllerInterface()
+        vision_analyzer = RobotVisionAnalyzer(robot_controller=robot_interface)
         safety_monitor = LidarSafetyMonitor()
 
         nav2_ready = False

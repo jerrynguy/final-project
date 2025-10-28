@@ -9,7 +9,7 @@ import logging
 import numpy as np
 from enum import Enum
 from ultralytics import YOLO
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from multi_function_agent.robot_vision_controller.utils.safety_checks import SafetyValidator
 
@@ -68,28 +68,20 @@ class SpatialDetector:
         
         # Navigation thresholds
         self.safe_distance_threshold = self.safety_validator.SAFE_DISTANCE
-    
-    def process_lidar_scan(self, scan_msg: LaserScan) -> List[Dict]:
+
+    def get_full_lidar_scan(self, scan_msg: LaserScan) -> Dict[int, float]:
         """
-        Process LiDAR scan message into obstacle list.
+        Get complete 360° LiDAR scan indexed by angle.
         """
         if not LIDAR_AVAILABLE or scan_msg is None:
-            return []
+            return {}
         
-        obstacles = []
+        angle_scan = {}
         
         try:
             angle_min = scan_msg.angle_min
             angle_increment = scan_msg.angle_increment
             ranges = scan_msg.ranges
-            
-            # Group obstacles by zone
-            zone_obstacles = {
-                'front': [],
-                'left': [],
-                'right': [],
-                'back': []
-            }
             
             for i, distance in enumerate(ranges):
                 # Filter invalid readings
@@ -99,17 +91,82 @@ class SpatialDetector:
                 if distance < self.lidar_min_range or distance > self.lidar_max_range:
                     continue
                 
-                # Calculate angle
-                angle = angle_min + (i * angle_increment)
-                angle_deg = np.degrees(angle)
+                # Calculate angle in degrees
+                angle_rad = angle_min + (i * angle_increment)
+                angle_deg = np.degrees(angle_rad)
                 
-                # Normalize angle to [-180, 180]
+                # Normalize to [-180, 180]
                 while angle_deg > 180:
                     angle_deg -= 360
                 while angle_deg < -180:
                     angle_deg += 360
                 
-                # Classify into zones based on angle
+                # Round to integer for indexing
+                angle_key = int(round(angle_deg))
+                
+                # Keep closest distance if multiple readings at same angle
+                if angle_key not in angle_scan or distance < angle_scan[angle_key]:
+                    angle_scan[angle_key] = distance
+            
+            logger.debug(f"[LIDAR FULL] Captured {len(angle_scan)} angle readings")
+            return angle_scan
+            
+        except Exception as e:
+            logger.error(f"Full LiDAR scan failed: {e}")
+            return {}
+
+
+    def query_distance_at_angle(
+        self, 
+        angle_scan: Dict[int, float], 
+        target_angle: float,
+        tolerance: int = 5
+    ) -> Optional[float]:
+        """
+        Query LiDAR distance at specific angle with tolerance.
+        """
+        target_int = int(round(target_angle))
+        
+        # Direct lookup first
+        if target_int in angle_scan:
+            return angle_scan[target_int]
+        
+        # Search within tolerance
+        for offset in range(1, tolerance + 1):
+            if target_int + offset in angle_scan:
+                return angle_scan[target_int + offset]
+            if target_int - offset in angle_scan:
+                return angle_scan[target_int - offset]
+        
+        return None
+
+    def process_lidar_scan(
+        self, 
+        scan_msg: LaserScan,
+        return_full_scan: bool = True
+    ) -> tuple[List[Dict], Dict[int, float]]:
+        """
+        Process LiDAR scan into obstacles + full 360° map.
+        """
+        if not LIDAR_AVAILABLE or scan_msg is None:
+            return [], {}
+        
+        # Get full 360° scan first
+        full_scan = self.get_full_lidar_scan(scan_msg) if return_full_scan else {}
+        
+        obstacles = []
+        
+        try:
+            # Group by zones for navigation obstacles
+            zone_obstacles = {
+                'front': [],
+                'left': [],
+                'right': [],
+                'back': []
+            }
+            
+            for angle_deg, distance in full_scan.items():
+                # Classify into zones
                 if -45 <= angle_deg <= 45:
                     zone = 'front'
                 elif 45 < angle_deg <= 135:
@@ -129,12 +186,11 @@ class SpatialDetector:
                 if not obs_list:
                     continue
                 
-                # Find closest obstacle in zone
                 closest = min(obs_list, key=lambda x: x['distance'])
                 distance = closest['distance']
                 angle = closest['angle']
                 
-                # Determine threat level based on distance
+                # Determine threat level
                 if distance < self.lidar_critical_distance:
                     threat = 'high'
                 elif distance < self.lidar_warning_distance:
@@ -153,20 +209,19 @@ class SpatialDetector:
                 }
                 obstacles.append(obstacle)
             
-            # Log summary
             if obstacles:
-                logger.info(f"[LIDAR] Detected {len(obstacles)} obstacles:")
+                logger.info(f"[LIDAR] Detected {len(obstacles)} zone obstacles")
                 for obs in obstacles:
                     logger.info(
                         f"  - {obs['position']}: {obs['distance_estimate']:.2f}m "
                         f"({obs['threat_level']}) at {obs['angle']:.1f}°"
                     )
             
-            return obstacles
+            return obstacles, full_scan
             
         except Exception as e:
             logger.error(f"LIDAR processing failed: {e}")
-            return []
+            return [], {}
     
     def _calculate_clearances_from_lidar(self, lidar_obstacles: List[Dict]) -> Dict[str, float]:
         """
@@ -267,9 +322,11 @@ class SpatialDetector:
             
             # Process LiDAR scan
             lidar_obstacles = []
+            full_lidar_scan = {}
             if lidar_scan is not None:
-                lidar_obstacles = self.process_lidar_scan(lidar_scan)
-                logger.info(f"[DEBUG] Processed {len(lidar_obstacles)} LIDAR obstacles")
+                lidar_obstacles, full_lidar_scan = self.process_lidar_scan(lidar_scan, return_full_scan=True)
+                logger.info(f"[DEBUG] Full LiDAR scan: {len(full_lidar_scan)} angles")
+
             else:
                 logger.warning("[DEBUG] No LIDAR data available!")
             
@@ -314,7 +371,8 @@ class SpatialDetector:
                 'recommended_direction': recommended_direction,
                 'spatial_confidence': 0.9,
                 'lidar_used': len(lidar_obstacles) > 0,
-                'clearances': clearances
+                'clearances': clearances,
+                'full_lidar_scan': full_lidar_scan
             }
             
             logger.info("[SPATIAL ANALYSIS END]")

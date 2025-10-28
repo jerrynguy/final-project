@@ -490,10 +490,10 @@ class RobotControllerInterface(Node):
         ready = self.nav2_interface.wait_for_nav2(timeout=timeout)
         
         if ready:
-            logger.info("✅ Nav2 is ready")
+            logger.info("Nav2 is ready")
             return True
         else:
-            logger.error("❌ Nav2 timeout - falling back to manual control")
+            logger.error("Nav2 timeout - falling back to manual control")
             self.use_nav2 = False
             return False
         

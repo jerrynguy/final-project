@@ -1,12 +1,7 @@
 {
-    "cSpell.words": [
-        "Đánh",
-        "gắng",
-        "khác",
-        "Khởi",
-        "không",
-        "LOẠI",
-        "PHÂN",
-        "tránh"
+    "python.defaultInterpreterPath": "/home/dung/nemo-agent-toolkit/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": [
+        "/home/dung/nemo-agent-toolkit/.venv/lib/python3.11/site-packages"
     ]
 }

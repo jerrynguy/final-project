@@ -52,6 +52,14 @@ class RobotVisionAnalyzer:
         # YOLO model for object detection (mission-specific)
         self.yolo_model = None
         self._yolo_initialized = False
+
+        # Camera configuration (TurtleBot3 Waffle)
+        self.CAMERA_FOV_HORIZONTAL = 62.0  # degrees
+        self.CAMERA_FOV_VERTICAL = 48.8    # degrees
+        self.CAMERA_WIDTH = 640
+        self.CAMERA_HEIGHT = 480
+        self.CAMERA_CENTER_X = self.CAMERA_WIDTH / 2
+        self.CAMERA_CENTER_Y = self.CAMERA_HEIGHT / 2
     
     def _merge_analysis_results(
         self,
@@ -92,8 +100,6 @@ class RobotVisionAnalyzer:
     def _initialize_yolo(self):
         """
         Lazy load YOLO model for object detection.
-        
-        Only loads when needed to save memory.
         """
         if not self._yolo_initialized:
             try:
@@ -104,12 +110,66 @@ class RobotVisionAnalyzer:
             except Exception as e:
                 logger.error(f"[YOLO] Failed to initialize: {e}")
                 self._yolo_initialized = False
+
+    def pixel_to_camera_angle(self, pixel_x: float, pixel_y: float) -> tuple[float, float]:
+        """
+        Convert pixel coordinates to camera-relative angles.
+        """
+        # Normalize to [-0.5, 0.5]
+        norm_x = (pixel_x - self.CAMERA_CENTER_X) / self.CAMERA_WIDTH
+        norm_y = (pixel_y - self.CAMERA_CENTER_Y) / self.CAMERA_HEIGHT
+        
+        # Scale by FOV
+        horizontal_angle = norm_x * self.CAMERA_FOV_HORIZONTAL
+        vertical_angle = norm_y * self.CAMERA_FOV_VERTICAL
+        
+        return horizontal_angle, vertical_angle
+
+
+    def get_lidar_distance_for_bbox(
+        self,
+        bbox_center_x: float,
+        full_lidar_scan: Dict[int, float]
+    ) -> Optional[float]:
+        """
+        Get accurate LiDAR distance for YOLO detected object.
+        """
+        if not full_lidar_scan:
+            logger.warning("[LIDAR FUSION] No full scan available")
+            return None
+        
+        # Convert pixel to camera angle
+        horizontal_angle, _ = self.pixel_to_camera_angle(bbox_center_x, self.CAMERA_CENTER_Y)
+        
+        # Camera faces forward (0°), so horizontal_angle IS the LiDAR angle
+        lidar_angle = horizontal_angle
+        
+        # Query LiDAR scan at that angle
+        distance = self.spatial_detector.query_distance_at_angle(
+            full_lidar_scan,
+            lidar_angle,
+            tolerance=5  # ±5° tolerance
+        )
+        
+        if distance is not None:
+            logger.debug(
+                f"[LIDAR FUSION] Pixel {bbox_center_x:.0f} → "
+                f"Angle {lidar_angle:.1f}° → Distance {distance:.2f}m"
+            )
+        else:
+            logger.warning(
+                f"[LIDAR FUSION] No LiDAR reading at {lidar_angle:.1f}° "
+                f"(tolerance ±5°)"
+            )
+        
+        return distance
     
     def detect_target_objects(
         self,
         frame: np.ndarray,
         target_class: str,
-        confidence_threshold: float = 0.5
+        confidence_threshold: float = 0.5,
+        full_lidar_scan: Dict[int, float] = None
     ) -> List[Dict]:
         """
         Detect specific object class in frame using YOLO.
@@ -164,7 +224,9 @@ class RobotVisionAnalyzer:
                     center_x, center_y = (x1 + x2) / 2, (y1 + y2) / 2
                     
                     # Estimate distance from bbox height
-                    distance_estimate = self._estimate_distance_from_bbox(h, y2, frame.shape[0])
+                    distance_estimate, distance_source = self.estimate_object_distance(
+                        h, y2, center_x, frame.shape[0], full_lidar_scan
+                    )
                     
                     detected_obj = {
                         'class': self.yolo_model.names[class_id],
@@ -173,7 +235,8 @@ class RobotVisionAnalyzer:
                         'bbox': bbox,
                         'center': (int(center_x), int(center_y)),
                         'size': (w, h),
-                        'distance_estimate': distance_estimate
+                        'distance_estimate': distance_estimate,
+                        'distance_source': distance_source
                     }
                     
                     detected_objects.append(detected_obj)
@@ -192,42 +255,60 @@ class RobotVisionAnalyzer:
         except Exception as e:
             logger.error(f"[YOLO] Detection failed: {e}")
             return []
-    
-    def _estimate_distance_from_bbox(
+
+    def estimate_object_distance(
         self,
         bbox_height: int,
         bbox_bottom: float,
-        frame_height: int
-    ) -> float:
+        bbox_center_x: float,
+        frame_height: int,
+        full_lidar_scan: Dict[int, float] = None
+    ) -> tuple[float, str]:
         """
-        Estimate distance to object based on bounding box size.
+        Estimate object distance using LiDAR fusion or fallback heuristic.
         """
-        normalized_height = bbox_height / frame_height
-        normalized_bottom = bbox_bottom / frame_height
+        # PRIORITY 1: Try LiDAR fusion
+        if full_lidar_scan:
+            lidar_distance = self.get_lidar_distance_for_bbox(bbox_center_x, full_lidar_scan)
+            
+            if lidar_distance is not None:
+                return lidar_distance, 'lidar'
         
-        # Heuristic calibration (adjust based on camera setup)
+        # PRIORITY 2: Fallback to heuristic (when LiDAR unavailable/out of range)
+        logger.warning("[DISTANCE] Falling back to heuristic estimation")
+        
+        normalized_height = bbox_height / frame_height
+        
         if normalized_height > 0.7:
-            return 0.5  # Very close
+            heuristic_distance = 0.5
         elif normalized_height > 0.5:
-            return 1.0
+            heuristic_distance = 1.0
         elif normalized_height > 0.3:
-            return 1.5
+            heuristic_distance = 1.5
         elif normalized_height > 0.2:
-            return 2.5
+            heuristic_distance = 2.5
         elif normalized_height > 0.1:
-            return 4.0
+            heuristic_distance = 4.0
         else:
-            return 6.0
+            heuristic_distance = 6.0
+        
+        return heuristic_distance, 'heuristic'
     
     def find_target_for_tracking(
         self,
         frame: np.ndarray,
-        target_class: str
+        target_class: str,
+        full_lidar_scan: Dict[int, float] = None
     ) -> Optional[Dict]:
         """
         Find closest target object for tracking (follow mission).
         """
-        detected = self.detect_target_objects(frame, target_class, confidence_threshold=0.6)
+        detected = self.detect_target_objects(
+            frame, 
+            target_class, 
+            confidence_threshold=0.6,
+            full_lidar_scan=full_lidar_scan
+        )
         
         if not detected:
             return None
@@ -316,16 +397,27 @@ class RobotVisionAnalyzer:
             frame,
             navigation_goal
         )
+
+        # Extract full LiDAR scan from result
+        full_lidar_scan = vision_analysis.get('full_lidar_scan', {})
         
         # Add mission-specific YOLO detection
         detected_objects = []
         if mission_type in ['count_objects', 'follow_target', 'avoid_target'] and target_class:
-            detected_objects = self.detect_target_objects(frame, target_class)
+            detected_objects = self.detect_target_objects(
+                frame, 
+                target_class,
+                full_lidar_scan=full_lidar_scan
+            )
             vision_analysis['detected_objects'] = detected_objects
         
         # Special handling for target tracking
         if mission_type == 'follow_target' and target_class:
-            target_obj = self.find_target_for_tracking(frame, target_class)
+            target_obj = self.find_target_for_tracking(
+                frame, 
+                target_class,
+                full_lidar_scan=full_lidar_scan
+            )
             
             if target_obj:
                 center_x = target_obj['center'][0]
