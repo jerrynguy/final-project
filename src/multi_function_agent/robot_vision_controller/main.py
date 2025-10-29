@@ -1,9 +1,3 @@
-"""
-Robot Vision Controller - OPTION B REFACTORED
-Uses new methods from mission_controller, vision_analyzer, lidar_monitor.
-Reduced from ~280 to ~200 lines.
-"""
-
 import numpy as np
 from pydantic import Field
 import time
