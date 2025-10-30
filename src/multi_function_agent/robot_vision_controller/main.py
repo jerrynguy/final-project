@@ -26,6 +26,7 @@ except ImportError:
 from multi_function_agent.robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
 
 from multi_function_agent.robot_vision_controller.core.query_extractor import QueryExtractor
+from multi_function_agent.robot_vision_controller.core.ros2_node import get_ros2_node, shutdown_ros2
 from multi_function_agent.robot_vision_controller.core.mission_controller import MissionController
 from multi_function_agent.robot_vision_controller.core.models import (
     get_robot_vision_model_manager,
@@ -82,6 +83,11 @@ safety_validator = SafetyValidator()
 model_manager = get_robot_vision_model_manager()
 query_extractor = QueryExtractor()
 
+# Initialize ROS2 node early (singleton pattern)
+logger.info("Initializing ROS2 node...")
+ros2_node = get_ros2_node()
+logger.info("✅ ROS2 node ready")
+
 logger.info("Starting robot vision model preloading...")
 preload_success = preload_robot_vision_model()
 
@@ -132,10 +138,8 @@ async def robot_vision_controller(
         # CHANGED: Removed BLIP2 model loading
         logger.info("Using YOLO-only vision pipeline (BLIP2 removed)")
         
-        # Initialize ROS2 if available
-        if ROS_AVAILABLE and not rclpy.ok():
-            logger.info("Initializing ROS2 context...")
-            rclpy.init(args=None)
+        # ROS2 already initialized globally via get_ros2_node()
+        logger.info("Using global ROS2 node instance")
         
         # Initialize core components
         navigation_reasoner = NavigationReasoner(
@@ -212,14 +216,7 @@ async def robot_vision_controller(
                 description=f"Robot vision control completed: {control_mode} mode",
             )
         finally:
-            # Cleanup ROS2 resources
-            if ROS_AVAILABLE and rclpy.ok():
-                try:
-                    if "robot_interface" in locals():
-                        robot_interface.destroy_node()
-                    rclpy.shutdown()
-                except Exception as e:
-                    logger.warning(f"ROS2 cleanup error: {e}")
+            logger.info("Mission completed, cleaning up...")
                     
     except Exception as e:
         logger.error(f"Error in robot vision control: {e}")
@@ -399,8 +396,11 @@ async def run_robot_control_loop(
             results["obstacles_detected"].extend(obstacles)
             
             # PRIORITY 3: MISSION STATE UPDATE 
-            robot_pos = None
-            if hasattr(robot_interface, 'robot_status'):
+            # Get robot position from ROS2 node directly
+            robot_pos = robot_interface.ros_node.get_robot_pose()
+
+            # Fallback to robot_status if needed
+            if robot_pos is None and hasattr(robot_interface, 'robot_status'):
                 robot_pos = {
                     'x': robot_interface.robot_status.position_x,
                     'y': robot_interface.robot_status.position_y,

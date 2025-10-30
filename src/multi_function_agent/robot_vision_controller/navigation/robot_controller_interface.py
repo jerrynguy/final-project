@@ -6,7 +6,6 @@ ROS2 interface for robot control with bridge mode fallback support.
 import time
 import logging
 import asyncio
-import requests
 import threading
 from enum import Enum
 from typing import Dict, Any, Optional
@@ -89,6 +88,7 @@ try:
         Nav2Interface,
         NavigationState
     )
+    from multi_function_agent.robot_vision_controller.core.ros2_node import get_ros2_node
     NAV2_AVAILABLE = True
 except ImportError:
     Nav2Interface = None
@@ -133,21 +133,12 @@ class RobotControllerInterface(Node):
     """
     
     def __init__(self, config_path: str = "config.yaml"):
-        """
-        Initialize robot controller interface.
-        """
-        self.use_bridge = self._should_use_bridge()
-        
-        if self.use_bridge:
-            self.bridge_url = "http://localhost:8080"
-            self._init_bridge_mode()
-            return
-        
-        super().__init__("robot_vision_controller")
+        # Get centralized ROS2 node (singleton)
+        self.ros_node = get_ros2_node()
         
         self.config = self._load_config(config_path)
-
-        self.use_nav2 = self.config.get('use_nav2', True)  # Enable Nav2 by default
+        
+        self.use_nav2 = self.config.get('use_nav2', True)
         self.nav2_interface = None
         
         if self.use_nav2 and NAV2_AVAILABLE:
@@ -157,174 +148,38 @@ class RobotControllerInterface(Node):
             except Exception as e:
                 logger.error(f"Failed to initialize Nav2: {e}")
                 self.use_nav2 = False
-        else:
-            logger.warning("Nav2 disabled or not available")
         
         self.robot_status = RobotStatus()
         self.is_connected = False
-        
         self._last_command_time = 0
         
-        self.lidar_data = None
-        self.use_lidar = self.config.get('use_lidar', True)
-        
-        self.map_data = None
-        self.use_slam_map = self.config.get('use_slam_map', True)
-        
-        self._setup_ros_interface()
-        
-        self.ros_manager = ROSManager(self)
-        self.ros_manager.start_spinning()
-        
-        logger.info("Simplified robot controller initialized")
-    
-    def _should_use_bridge(self) -> bool:
-        """
-        Determine if bridge mode should be used.
-        """
-        return not ROS_AVAILABLE
-    
-    def _init_bridge_mode(self):
-        """
-        Initialize HTTP bridge mode.
-        """
-        self.robot_status = RobotStatus()
-        self.is_connected = self._check_bridge_connection()
-        
-        # Initialize attributes
-        self.lidar_data = None
-        self.map_data = None
+        logger.info("Robot controller initialized with native ROS2")
 
-        self.use_nav2 = False
-        self.nav2_interface = None
+    @property
+    def lidar_data(self):
+        """Get latest LIDAR data from ROS2 node."""
+        return self.ros_node.get_scan()
 
-        if ROS_AVAILABLE and NAV2_AVAILABLE:
-            try:
-                # Initialize ROS2 context if not already
-                if not rclpy.ok():
-                    rclpy.init(args=None)
-                
-                # Try to initialize Nav2Interface
-                self.nav2_interface = Nav2Interface()
-                self.use_nav2 = True
-                logger.info("Bridge mode WITH Nav2 enabled (hybrid architecture)")
-            except Exception as e:
-                logger.warning(f"Nav2 init failed in bridge mode: {e}")
-                self.use_nav2 = False
-        else:
-            logger.info("Nav2 not available - bridge mode manual-only")
+    @property  
+    def robot_status(self):
+        """Get robot status from odometry."""
+        if not hasattr(self, '_robot_status'):
+            self._robot_status = RobotStatus()
         
-        # Start LiDAR polling thread
-        if self.is_connected:
-            self._start_lidar_polling()
+        # Update from ROS2 node
+        pose = self.ros_node.get_robot_pose()
+        if pose:
+            self._robot_status.position_x = pose['x']
+            self._robot_status.position_y = pose['y']
+            self._robot_status.theta = pose['theta']
+            self._robot_status.is_ready = True
         
-        logger.info("Using ROS bridge mode with lidar polling")
-    
-    def _start_lidar_polling(self):
-        """
-        Start background thread for polling LiDAR data from bridge.
-        """
-        def poll_loop():
-            consecutive_failures = 0
-            last_success_log = 0
-            while True:
-                try:
-                    response = requests.get(
-                        f"{self.bridge_url}/robot/lidar",
-                        timeout=0.5
-                    )
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        data = result.get('data')
-                        
-                        if data and 'ranges' in data:
-                            self.lidar_data = self._convert_to_laserscan(data)
-                            consecutive_failures = 0
-                            
-                            # Log success every 50 updates
-                            current_time = time.time()
-                            if current_time - last_success_log > 5.0:
-                                logger.info(f"✅ LIDAR active: {len(self.lidar_data.ranges)} rays, "
-                                        f"min={min(self.lidar_data.ranges):.2f}m")
-                                last_success_log = current_time
-                        else:
-                            consecutive_failures += 1
-                            if consecutive_failures == 1:
-                                logger.warning("⚠️  LIDAR data empty from bridge")
-                    else:
-                        consecutive_failures += 1
-                        if consecutive_failures == 1:
-                            logger.warning(f"⚠️  Bridge returned status {response.status_code}")
-                            
-                except Exception as e:
-                    consecutive_failures += 1
-                    if consecutive_failures == 1:
-                        logger.error(f"❌ Lidar polling error: {e}")
-                
-                # Exponential backoff on failures
-                if consecutive_failures > 10:
-                    time.sleep(1.0)
-                else:
-                    time.sleep(0.1)  # 10Hz polling rate
-        
-        thread = threading.Thread(target=poll_loop, daemon=True)
-        thread.start()
-        logger.info("Lidar polling thread started")
-    
-    def _convert_to_laserscan(self, data: dict):
-        """
-        Convert dictionary to LaserScan-like object.
-        """
-        class MockLaserScan:
-            def __init__(self, data):
-                self.ranges = data['ranges']
-                self.angle_min = data['angle_min']
-                self.angle_max = data['angle_max']
-                self.angle_increment = data['angle_increment']
-                self.range_min = data['range_min']
-                self.range_max = data['range_max']
-        
-        return MockLaserScan(data)
-    
-    def _check_bridge_connection(self) -> bool:
-        """
-        Check if bridge server is accessible.
-        """
-        try:
-            response = requests.get(
-                f"{self.bridge_url}/robot/status",
-                timeout=2
-            )
-            return response.status_code == 200
-        except:
-            return False
-    
-    async def _execute_via_bridge(self, navigation_decision: Dict[str, Any]) -> bool:
-        """
-        Execute command via HTTP bridge.
-        """
-        try:
-            action = navigation_decision.get('action', 'stop')
-            parameters = navigation_decision.get('parameters', {})
-            
-            payload = {
-                "action": action,
-                "parameters": parameters
-            }
-            
-            response = requests.post(
-                f"{self.bridge_url}/robot/command",
-                json=payload,
-                timeout=5
-            )
-            
-            result = response.json()
-            return result.get("status") == "success"
-            
-        except Exception as e:
-            logger.error(f"Bridge command failed: {e}")
-            return False
+        return self._robot_status
+
+    @robot_status.setter
+    def robot_status(self, value):
+        """Set robot status."""
+        self._robot_status = value
         
     def _load_config(self, config_path: str) -> dict:
         """Load configuration from YAML file."""
@@ -376,100 +231,35 @@ class RobotControllerInterface(Node):
                 'nav2_angle_tolerance': 0.1,
                 'nav2_fallback_to_manual': True,
             }
-    
-    def _setup_ros_interface(self):
-        """
-        Setup ROS2 publishers and subscribers.
-        """
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
         
-        # Publishers
-        self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", qos)
-        self.status_pub = self.create_publisher(String, "/robot_vision_status", qos)
-        
-        # Odometry subscriber
-        self.odom_sub = self.create_subscription(
-            Odometry,
-            "/odom",
-            self._odometry_callback,
-            qos
-        )
-        
-        # LiDAR subscriber
-        if self.use_lidar:
-            lidar_topic = self.config.get('lidar_topic', '/scan')
-            self.scan_sub = self.create_subscription(
-                LaserScan,
-                lidar_topic,
-                self._scan_callback,
-                qos
-            )
-            logger.info(f"Lidar subscriber created on {lidar_topic}")
-        
-        # SLAM map subscriber
-        if self.use_slam_map:
-            map_topic = self.config.get('map_topic', '/map')
-            self.map_sub = self.create_subscription(
-                OccupancyGrid,
-                map_topic,
-                self._map_callback,
-                qos
-            )
-            logger.info(f"Map subscriber created on {map_topic}")
-    
     async def connect(self) -> bool:
-        """
-        Connect to robot (via bridge or ROS).
-        """
-        if self.use_bridge:
-            try:
-                logger.info("Connecting to robot via bridge...")
-                self.is_connected = self._check_bridge_connection()
-                
-                if self.is_connected:
-                    self.robot_status.state = RobotState.IDLE
-                    self.robot_status.is_ready = True
-                    self._publish_status("Robot connected via bridge")
-                    logger.info("Robot connected via bridge")
-                    return True
-                else:
-                    logger.error("Bridge connection failed")
-                    self.robot_status.state = RobotState.ERROR
-                    return False
-                    
-            except Exception as e:
-                logger.error(f"Bridge connection error: {e}")
-                self.is_connected = False
-                self.robot_status.state = RobotState.ERROR
-                self.robot_status.error_message = str(e)
-                return False
-        
+        """Connect to robot via ROS2."""
         try:
-            logger.info("Connecting to robot...")
+            logger.info("Checking ROS2 connection...")
             
-            # Test connection by publishing empty twist
-            test_twist = Twist()
-            self.cmd_vel_pub.publish(test_twist)
+            # Test by publishing empty twist
+            self.ros_node.publish_stop()
             
             await asyncio.sleep(0.5)
+            
+            # Check if receiving data
+            if self.ros_node.get_scan() is None:
+                logger.warning("No LIDAR data yet")
+            
+            if self.ros_node.get_odom() is None:
+                logger.warning("No odometry data yet")
             
             self.is_connected = True
             self.robot_status.state = RobotState.IDLE
             self.robot_status.is_ready = True
             
-            self._publish_status("Robot connected successfully")
-            logger.info("Robot connection established")
+            logger.info("✅ Robot connected via ROS2 DDS")
             return True
             
         except Exception as e:
             logger.error(f"Robot connection failed: {e}")
             self.is_connected = False
             self.robot_status.state = RobotState.ERROR
-            self.robot_status.error_message = str(e)
             return False
         
     async def wait_for_nav2_ready(self, timeout: float = 10.0) -> bool:
@@ -571,11 +361,7 @@ class RobotControllerInterface(Node):
         return state.value if state else None
     
     async def execute_command(self, navigation_decision: Dict[str, Any]) -> bool:
-        """
-        Execute navigation command on robot.
-        """
-        if self.use_bridge:
-            return await self._execute_via_bridge(navigation_decision)
+        """Execute navigation command on robot."""
         
         if not self.is_connected or not self.robot_status.is_ready:
             logger.error("Cannot execute command: robot not ready")
@@ -587,14 +373,8 @@ class RobotControllerInterface(Node):
             action = navigation_decision.get('action', 'stop')
             parameters = navigation_decision.get('parameters', {})
             
-            logger.info(f"execute_command called: action={action}")
-            
             # Convert to ROS Twist message
             twist_msg = convert_navigation_to_twist(action, parameters, self.config)
-            logger.info(
-                f"Twist created: linear={twist_msg.linear.x}, "
-                f"angular={twist_msg.angular.z}"
-            )
             
             # Validate safety
             if not validate_robot_command_safety(twist_msg, self.config):
@@ -606,12 +386,10 @@ class RobotControllerInterface(Node):
                 twist_msg,
                 parameters.get('duration', 1.0)
             )
-            logger.info(f"Send result: {success}")
             
             if success:
                 self._last_command_time = current_time
                 self._update_robot_state(action)
-                self._publish_status(f"Executed: {action}")
             
             return success
             
@@ -621,67 +399,54 @@ class RobotControllerInterface(Node):
             return False
     
     async def _send_command(self, twist: Twist, duration: float) -> bool:
-        """
-        Send twist command with AGGRESSIVE safety monitoring.
-        
-        CRITICAL: Aborts immediately if obstacle detected during execution.
-        """
         try:
             logger.info(
                 f"Publishing cmd_vel: linear={twist.linear.x:.3f}, "
                 f"angular={twist.angular.z:.3f}, duration={duration:.2f}s"
             )
             
-            publish_rate = 20  # Increased from 10Hz to 20Hz for faster abort
+            publish_rate = 20
             interval = 1.0 / publish_rate
             iterations = int(duration / interval)
             
-            # Import safety monitor
             from multi_function_agent.robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
             safety_monitor = LidarSafetyMonitor()
             
-            # Execute with continuous safety check
             for i in range(max(1, iterations)):
-                # ============================================================
-                # CRITICAL: Check safety BEFORE each publish
-                # ============================================================
                 if self.lidar_data is not None:
                     min_dist = safety_monitor.get_min_distance(self.lidar_data)
                     
-                    # IMMEDIATE ABORT if critical distance breached
                     if min_dist < safety_monitor.CRITICAL_DISTANCE:
                         logger.error(
                             f"[EMERGENCY ABORT] Obstacle at {min_dist:.2f}m! "
                             f"Stopping immediately (iteration {i+1}/{iterations})"
                         )
-                        # Send immediate stop
-                        stop_twist = Twist()
-                        for _ in range(5):  # Spam stop commands
-                            self.cmd_vel_pub.publish(stop_twist)
+                        # ✅ THAY ĐỔI: Dùng ros_node
+                        for _ in range(5):
+                            self.ros_node.publish_stop()
                             await asyncio.sleep(0.01)
-                        return False  # Abort execution
+                        return False
                     
-                    # WARNING: Reduce speed significantly if approaching critical
                     elif min_dist < safety_monitor.WARNING_DISTANCE:
                         scale = (min_dist - safety_monitor.CRITICAL_DISTANCE) / \
                                 (safety_monitor.WARNING_DISTANCE - safety_monitor.CRITICAL_DISTANCE)
-                        scale = max(0.2, min(1.0, scale))  # Clamp [0.2, 1.0]
+                        scale = max(0.2, min(1.0, scale))
                         
                         logger.warning(
                             f"[SPEED REDUCTION] Obstacle at {min_dist:.2f}m, "
                             f"scaling to {scale*100:.0f}%"
                         )
                         
-                        scaled_twist = Twist()
-                        scaled_twist.linear.x = twist.linear.x * scale * 0.5
-                        scaled_twist.angular.z = twist.angular.z * scale
-                        self.cmd_vel_pub.publish(scaled_twist)
+                        # ✅ THAY ĐỔI: Dùng ros_node
+                        scaled_linear = twist.linear.x * scale * 0.5
+                        scaled_angular = twist.angular.z * scale
+                        self.ros_node.publish_velocity(scaled_linear, scaled_angular)
                     else:
-                        # Safe: publish original command
-                        self.cmd_vel_pub.publish(twist)
+                        # ✅ THAY ĐỔI: Dùng ros_node
+                        self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
                 else:
-                    # No LIDAR data: publish with caution
-                    self.cmd_vel_pub.publish(twist)
+                    # ✅ THAY ĐỔI: Dùng ros_node
+                    self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
                 
                 await asyncio.sleep(interval)
             
@@ -689,27 +454,25 @@ class RobotControllerInterface(Node):
             
         except Exception as e:
             logger.error(f"Failed to send command: {e}")
-            # Emergency stop on error
             try:
-                stop_twist = Twist()
+                # ✅ THAY ĐỔI: Dùng ros_node
                 for _ in range(5):
-                    self.cmd_vel_pub.publish(stop_twist)
+                    self.ros_node.publish_stop()
                     await asyncio.sleep(0.01)
             except:
                 pass
             return False
     
     async def _emergency_stop(self) -> bool:
-        """
-        Execute emergency stop.
-        """
         try:
+            # Old
             stop_twist = Twist()
             self.cmd_vel_pub.publish(stop_twist)
             
-            self.robot_status.state = RobotState.IDLE
-            self._publish_status("EMERGENCY STOP")
+            # New
+            self.ros_node.publish_stop()
             
+            self.robot_status.state = RobotState.IDLE
             logger.warning("Emergency stop executed")
             return True
             
@@ -727,49 +490,6 @@ class RobotControllerInterface(Node):
             self.robot_status.state = RobotState.MOVING
         
         self.robot_status.last_update = time.time()
-    
-    def _odometry_callback(self, msg: Odometry):
-        """
-        Handle odometry message updates.
-        """
-        try:
-            self.robot_status.position_x = msg.pose.pose.position.x
-            self.robot_status.position_y = msg.pose.pose.position.y
-
-            from tf_transformations import euler_from_quaternion
-
-            q = msg.pose.pose.orientation
-            _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
-            self.robot_status.theta = yaw
-            
-            self.robot_status.last_update = time.time()
-            
-            # Check if connection is still alive
-            self.robot_status.is_ready = (
-                time.time() - self.robot_status.last_update
-                < self.config['connection_timeout']
-            )
-            
-        except Exception as e:
-            logger.error(f"Odometry callback error: {e}")
-    
-    def _scan_callback(self, msg: LaserScan):
-        """
-        Handle LiDAR scan message updates.
-        """
-        try:
-            self.lidar_data = msg
-        except Exception as e:
-            logger.error(f"Scan callback error: {e}")
-    
-    def _map_callback(self, msg: OccupancyGrid):
-        """
-        Handle SLAM map message updates.
-        """
-        try:
-            self.map_data = msg
-        except Exception as e:
-            logger.error(f"Map callback error: {e}")
     
     def _publish_status(self, message: str):
         """
