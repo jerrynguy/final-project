@@ -23,7 +23,6 @@ Hệ thống điều khiển robot TurtleBot3 tự động với AI Agent thông
 - [Mission Types](#mission-types)
 - [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
 - [Cài đặt](#cài-đặt)
-- [Cách chạy](#cách-chạy)
 - [Ghi chú quan trọng](#ghi-chú-quan-trọng)
 
 ## 📁 Cấu trúc thư mục
@@ -57,17 +56,6 @@ multi_function_agent/
                 ├── error_handlers.py             # Error logging
                 ├── output_formatter.py           # Output logging
                 └── performance_logger.py         # Performance logging
-
-docker/   
-    ├── docker-compose.yml                        # Multi-container orchestration
-    ├── Dockerfile.ros2                           # ROS2 + Nav2 + Gazebo container
-    ├── Dockerfile.nat                            # NAT + AI Agent container
-    ├── run.sh                                    # Main launcher script
-    ├── stop.sh                                   # Graceful shutdown
-    ├── status.sh                                 # Health monitoring
-    ├── Makefile                                  # Convenience commands
-    └── scripts/
-        └── ros2_entrypoint.sh                    # ROS2 service startup
 
 ros2_bridge_service/
 └── robot_bridge_server.py                        # HTTP ↔ ROS2 bridge
@@ -308,34 +296,7 @@ goal = (x + d*cos(θ+offset), y + d*sin(θ+offset), θ+offset)
 
 ## 🔧 Cài đặt
 
-### **Bước 1: Cài đặt Docker**
-
-```bash
-# Cài Docker Engine
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-
-# Add user to docker group (no sudo needed)
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Verify installation
-docker --version
-docker compose version
-```
-
-### **Bước 2: Enable X11 forwarding (cho Gazebo GUI)**
-
-```bash
-# Install xhost
-sudo apt-get update
-sudo apt-get install x11-xserver-utils
-
-# Allow Docker to access X server
-xhost +local:docker
-```
-
-### **Bước 3: Clone Repository**
+### **Bước 1: Clone Repository**
 
 ```bash
 cd ~
@@ -343,7 +304,7 @@ git clone https://github.com/jerrynguy/final-project.git nemo-agent-toolkit
 cd nemo-agent-toolkit
 ```
 
-### **Bước 4: Tạo Map (chỉ cần 1 lần)**
+### **Bước 2: Tạo Map (chỉ cần 1 lần)**
 
 **Option A: Tạo map mới với SLAM**
 
@@ -369,125 +330,6 @@ ros2 run nav2_map_server map_saver_cli -f my_map
 **Option B: Dùng map có sẵn**
 
 Nếu bạn đã có map, đảm bảo files nằm ở `~/my_map.yaml` và `~/my_map.pgm`.
-
-### **Bước 5: Build Docker Images**
-
-```bash
-cd ~/nemo-agent-toolkit/docker
-
-# Make scripts executable
-chmod +x *.sh
-chmod +x scripts/*.sh
-
-# Build images (5-10 phút lần đầu)
-./run.sh
-```
-
-Lệnh này sẽ:
-1. Build ROS2-Nav2 container
-2. Build NAT-Agent container
-3. Start all services
-4. Wait for health checks
-5. Display status
-
----
-
-## 🚀 Cách chạy
-
-### **Quick Start (Recommended)**
-
-```bash
-cd ~/nemo-agent-toolkit/docker
-
-# Start entire stack
-./run.sh
-```
-
-Script tự động:
-- ✅ Pre-flight checks (Docker, X11, maps)
-- ✅ Build images if needed
-- ✅ Start containers
-- ✅ Wait for services ready
-- ✅ Display status and commands
-
-### **Chạy NAT Agent với Mission**
-
-Sau khi `./run.sh` hoàn tất:
-
-```bash
-# Enter NAT container
-docker exec -it nat_agent_container bash
-
-# Run mission (inside container)
-nat run --config_file /workspace/configs/config.yml --input "YOUR_MISSION_HERE"
-```
-
-**Example Missions:**
-
-```bash
-# Explore với Nav2
-nat run --config_file /workspace/configs/config.yml --input "Run wide automatically in 60 seconds"
-
-# Count objects (YOLO)
-nat run --config_file /workspace/configs/config.yml --input "Đếm 10 chai nước"
-
-# Follow target (Hybrid Nav2 + YOLO)
-nat run --config_file /workspace/configs/config.yml --input "Theo sau người đang đi"
-
-# Patrol laps (Nav2)
-nat run --config_file /workspace/configs/config.yml --input "Đi 5 vòng tròn"
-```
-
-### **Set Initial Pose in RViz (QUAN TRỌNG)**
-
-Nav2 cần biết vị trí ban đầu của robot:
-
-```bash
-# Enter ROS2 container
-docker exec -it ros2_nav2_container bash
-
-# Launch RViz
-rviz2
-
-# Trong RViz:
-# 1. Click "2D Pose Estimate" tool
-# 2. Click vào vị trí robot trên map
-# 3. Drag để set hướng
-```
-
-### **Monitor System**
-
-```bash
-# Check status
-./status.sh
-
-# View logs
-docker compose logs -f ros2-nav2
-docker compose logs -f nat-agent
-
-# Enter containers
-docker exec -it ros2_nav2_container bash
-docker exec -it nat_agent_container bash
-
-# Check ROS2 topics
-docker exec -it ros2_nav2_container bash
-ros2 topic list
-ros2 topic echo /cmd_vel
-ros2 node list
-```
-
-### **Stop System**
-
-```bash
-# Graceful shutdown
-./stop.sh
-
-# Or force stop
-docker compose down
-
-# Clean everything (images, volumes)
-docker compose down -v --rmi all
-```
 
 ---
 
@@ -560,73 +402,6 @@ docker compose down -v --rmi all
 - **Completion Detection**: Auto-stop when goal achieved
 - **Adaptive Navigation**: Hybrid Nav2/Manual based on directive
 - **Real-time Tracking**: YOLO bbox center + distance estimation
-
----
-
-### **Troubleshooting**
-
-**Problem: Gazebo không hiển thị GUI**
-```bash
-# Check DISPLAY variable
-echo $DISPLAY
-
-# Re-enable X11
-xhost +local:docker
-
-# Restart containers
-./stop.sh && ./run.sh
-```
-
-**Problem: Nav2 không nhận goal**
-```bash
-# Check Nav2 status
-docker exec -it ros2_nav2_container bash
-ros2 node list | grep bt_navigator
-
-# Check if initial pose set
-ros2 topic echo /initialpose --once
-
-# Manually set initial pose in RViz
-rviz2  # Use "2D Pose Estimate" tool
-```
-
-**Problem: RTSP stream không hoạt động**
-```bash
-# Check MediaMTX
-docker exec -it ros2_nav2_container bash
-ps aux | grep mediamtx
-
-# Test stream
-ffprobe rtsp://localhost:8554/robotcam
-
-# Restart RTSP publisher
-docker compose restart ros2-nav2
-```
-
-**Problem: Bridge server không response**
-```bash
-# Check bridge
-curl http://localhost:8080/robot/status
-
-# View logs
-docker compose logs ros2-nav2 | grep bridge
-
-# Restart service
-docker compose restart ros2-nav2
-```
-
-**Problem: Container không start**
-```bash
-# Check Docker logs
-docker compose logs
-
-# Check resource usage
-docker stats
-
-# Clean and rebuild
-docker compose down -v
-./run.sh
-```
 
 ---
 
