@@ -23,6 +23,7 @@ Hệ thống điều khiển robot TurtleBot3 tự động với AI Agent thông
 - [Mission Types](#mission-types)
 - [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
 - [Cài đặt](#cài-đặt)
+- [Cách chạy](#cách-chạy)
 - [Ghi chú quan trọng](#ghi-chú-quan-trọng)
 
 ## 📁 Cấu trúc thư mục
@@ -32,16 +33,17 @@ multi_function_agent/
     ├── configs/
     │   └── config.yml                            # Cấu hình system + Nav2
     └── robot_vision_controller/
-        ├── main.py                               # Entry point - HYBRID LOOP
+        ├── main.py                               # Entry point - ROS2 integration
         ├── core/
         │   ├── query_extractor.py                # Prompt information extraction
         │   ├── goal_parser.py                    # LLM mission parser 
-        │   ├── mission_controller.py             # Mission state machine 
+        │   ├── mission_controller.py             # Mission state machine
+        │   ├── ros2_node.py                      # ✅ NEW: Centralized ROS2 node
         │   └── models.py                         # YOLO model management
         ├── navigation/
         │   ├── nav2_interface.py                 # Nav2 Python interface
-        │   ├── navigation_reasoner.py            # Mission-aware manual control
-        │   └── robot_controller_interface.py     # ROS/Gazebo interface + Nav2
+        │   ├── navigation_reasoner.py            # Mission-aware navigation logic
+        │   └── robot_controller_interface.py     # ROS2 DDS communication
         ├── perception/
         │   ├── lidar_monitor.py                  # Real-time collision avoidance
         │   ├── robot_vision_analyzer.py          # YOLO + LIDAR spatial analysis
@@ -57,8 +59,9 @@ multi_function_agent/
                 ├── output_formatter.py           # Output logging
                 └── performance_logger.py         # Performance logging
 
-ros2_bridge_service/
-└── robot_bridge_server.py                        # HTTP ↔ ROS2 bridge
+docker/   
+    ├── Dockerfile                                # NAT container with ROS2 packages
+    └── build_container.sh                        # Container build script
 
 turtlebot3_ws/
 └── src/
@@ -71,14 +74,14 @@ turtlebot3_ws/
 
 ## 🎯 Tổng quan hệ thống
 
-Hệ thống được thiết kế theo **kiến trúc Docker Multi-Container**, tách biệt hoàn toàn giữa AI Agent và ROS2 stack, đồng thời cho phép giao tiếp real-time qua ROS2 DDS network.
+Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communication**, AI Agent container giao tiếp trực tiếp với ROS2 nodes qua DDS network (không qua HTTP bridge).
 
 ### **Thành phần chính:**
 
-#### **1. ROS2-Nav2 Container** (Python 3.10)
+#### **1. ROS2 Environment (Native Host)**
 ```
 ┌─────────────────────────────────────────────┐
-│   ROS2 Humble + Nav2 + Gazebo Container     │
+│   ROS2 Humble + Nav2 + Gazebo (Host)        │
 ├─────────────────────────────────────────────┤
 │  • TurtleBot3 Simulation (Gazebo)           │
 │  • Nav2 Navigation Stack                    │
@@ -88,20 +91,20 @@ Hệ thống được thiết kế theo **kiến trúc Docker Multi-Container**,
 │    - Recovery Behaviors                     │
 │  • SLAM Toolbox (Real-time mapping)         │
 │  • MediaMTX (RTSP streaming)                │
-│  • Bridge Server (HTTP ↔ ROS2)              │
 │  • LIDAR Scanner (360° safety)              │
 └─────────────────────────────────────────────┘
 ```
 
-**Exposed Services:**
-- `localhost:11345` - Gazebo GUI
-- `localhost:8554` - RTSP stream (rtsp://localhost:8554/robotcam)
-- `localhost:8080` - Bridge API (HTTP fallback)
-- ROS2 Topics: `/cmd_vel`, `/scan`, `/odom`, `/map`, `/plan`
+**ROS2 Topics:**
+- `/cmd_vel` - Velocity commands
+- `/scan` - LIDAR data
+- `/odom` - Odometry
+- `/map` - SLAM map
+- `/plan` - Nav2 path
 
 ---
 
-#### **2. NAT-Agent Container** (Python 3.11)
+#### **2. NAT-Agent Container (Python 3.12 + ROS2 Client)**
 ```
 ┌─────────────────────────────────────────────┐
 │     NVIDIA NAT + AI Agent Container         │
@@ -120,23 +123,58 @@ Hệ thống được thiết kế theo **kiến trúc Docker Multi-Container**,
 │  • Vision Analyzer                          │
 │    - YOLO + LIDAR fusion                    │
 │    - Spatial awareness                      │
-│  • ROS2 Client Libraries                    │
-│    - rclpy for native ROS2 communication    │
+│  • ROS2 Native Communication                │
+│    - rclpy for DDS communication            │
+│    - Direct topic pub/sub                   │
 │    - Nav2 action client                     │
 └─────────────────────────────────────────────┘
 ```
 
 **Key Features:**
-- Native ROS2 integration (not bridge-only)
-- Direct Nav2 action client for goal sending
+- Native ROS2 DDS communication (no HTTP bridge)
+- Direct topic publishing/subscribing
+- Nav2 action client for goal sending
 - YOLO-only pipeline (BLIP2 removed)
 - Mission-driven autonomous behavior
 
 ---
 
-### **Workflow tổng quan - Hybrid Docker Architecture**
+### **Workflow tổng quan - Native ROS2 DDS Architecture**
+
 
 ![Workflow Diagram](src/multi_function_agent/robot_vision_controller/images/nat_container.png)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    HOST MACHINE                             │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐  │
+│  │   ROS2 Humble (Native)                              │  │
+│  │   - Gazebo + Nav2 + TurtleBot3                      │  │
+│  │   - Topics: /cmd_vel, /scan, /odom, /map           │  │
+│  └──────────────────┬──────────────────────────────────┘  │
+│                     │                                      │
+│                     │ ROS2 DDS Network (FastRTPS)          │
+│                     │ (Host Network Mode)                  │
+│                     │                                      │
+│  ┌──────────────────▼──────────────────────────────────┐  │
+│  │   NAT Container (nvidia-nat)                        │  │
+│  │   - Python 3.12 + ROS2 Client Libraries            │  │
+│  │   - core/ros2_node.py (Centralized Node)           │  │
+│  │   - Direct pub/sub: /cmd_vel, /scan, /odom         │  │
+│  │   - Nav2 action client: /navigate_to_pose          │  │
+│  │   - AI Agent + YOLO + Mission Controller            │  │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
+```
+
+**Communication Flow:**
+1. **Sensor Data:** `/scan`, `/odom` → ROS2 DDS → NAT container subscribers
+2. **Commands:** NAT container publisher → ROS2 DDS → `/cmd_vel` → Gazebo
+3. **Nav2 Goals:** NAT container action client → ROS2 DDS → Nav2 action server
+4. **Latency:** <1ms (shared memory), <3ms (localhost UDP)
 
 ---
 
@@ -198,13 +236,6 @@ Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
 - Dừng khi đủ số lượng
 - Track progress: current_count / target_count
 
-**Example Output:**
-```
-[MISSION] Count 10 bottles
-Progress: 3/10 bottles detected
-Directive: explore_random (searching for more)
-```
-
 ---
 
 ### **2. Follow Target** (Bám theo mục tiêu)
@@ -219,14 +250,6 @@ Directive: explore_random (searching for more)
 - YOLO bbox tracking với real-time adjustment
 - Search pattern if lost >3s
 - Recovery: rotate, explore, approach
-
-**State Machine:**
-```
-TRACKING → target visible, distance OK
-APPROACHING → target far, move closer
-BACKING_UP → target too close (<1.0m)
-SEARCHING → target lost, scan environment
-```
 
 ---
 
@@ -243,14 +266,6 @@ SEARCHING → target lost, scan environment
 - Return to start position after completion
 - Track progress: current_lap / target_laps
 
-**Implementation:**
-```python
-# Generate arc waypoint
-angle_offset = 0.3 rad  # 17 degrees
-distance = 1.0m
-goal = (x + d*cos(θ+offset), y + d*sin(θ+offset), θ+offset)
-```
-
 ---
 
 ### **4. Explore Area** (Khám phá)
@@ -266,37 +281,79 @@ goal = (x + d*cos(θ+offset), y + d*sin(θ+offset), θ+offset)
 - Time-based or continuous exploration
 - Coverage maximization
 
-**Parameters:**
-- `duration`: Time limit (seconds)
-- `coverage`: "full" | "partial" | "random"
-
 ---
 
 ## 💻 Yêu cầu hệ thống
 
 ### **Phần mềm bắt buộc**
 - **Ubuntu 22.04 LTS** (khuyến nghị)
-- **Docker** 20.10+ with Docker Compose V2
+- **ROS2 Humble** (native install on host)
+- **Docker** 20.10+ 
 - **NVIDIA GPU** (optional, for faster YOLO)
 
 ### **Phần cứng khuyến nghị**
-- **RAM**: 8GB+ (Docker containers: ~3GB)
+- **RAM**: 8GB+ (ROS2 + Docker: ~3GB)
 - **GPU**: NVIDIA with CUDA support (optional)
 - **CPU**: 4+ cores
-- **Disk**: 20GB free space (Docker images)
+- **Disk**: 10GB free space (Docker image)
 
-### **Dependencies tự động cài qua Docker:**
-- ROS2 Humble
-- Nav2 navigation stack
-- TurtleBot3 packages
-- YOLO model
-- Python libraries
+### **Dependencies tự động cài:**
+- ROS2 Humble packages (host)
+- Nav2 navigation stack (host)
+- TurtleBot3 packages (host)
+- ROS2 client libraries (container)
+- YOLO model (container)
+- Python libraries (container)
 
 ---
 
 ## 🔧 Cài đặt
 
-### **Bước 1: Clone Repository**
+### **Bước 1: Cài đặt ROS2 Humble (Host)**
+
+```bash
+# Add ROS2 repository
+sudo apt update && sudo apt install -y software-properties-common curl
+sudo add-apt-repository universe
+curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu jammy main" \
+    | sudo tee /etc/apt/sources.list.d/ros2.list
+
+# Install ROS2 Humble Desktop
+sudo apt update
+sudo apt install -y ros-humble-desktop
+
+# Install Nav2
+sudo apt install -y ros-humble-navigation2 ros-humble-nav2-bringup
+
+# Install TurtleBot3
+sudo apt install -y ros-humble-turtlebot3*
+
+# Install SLAM Toolbox
+sudo apt install -y ros-humble-slam-toolbox
+
+# Source ROS2
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+source ~/.bashrc
+```
+
+### **Bước 2: Cài đặt Docker**
+
+```bash
+# Install Docker Engine
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# Add user to docker group
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Verify installation
+docker --version
+```
+
+### **Bước 3: Clone Repository**
 
 ```bash
 cd ~
@@ -304,12 +361,11 @@ git clone https://github.com/jerrynguy/final-project.git nemo-agent-toolkit
 cd nemo-agent-toolkit
 ```
 
-### **Bước 2: Tạo Map (chỉ cần 1 lần)**
-
-**Option A: Tạo map mới với SLAM**
+### **Bước 4: Tạo Map (chỉ cần 1 lần)**
 
 ```bash
-# Terminal 1: Launch Gazebo (native ROS2, không dùng Docker)
+# Terminal 1: Launch Gazebo
+export TURTLEBOT3_MODEL=waffle_pi
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 
 # Terminal 2: Launch SLAM
@@ -318,43 +374,129 @@ ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True
 # Terminal 3: Launch RViz
 rviz2
 
-# Terminal 4: Teleop để khám phá (tạo map)
+# Terminal 4: Teleop để khám phá
 ros2 run turtlebot3_teleop teleop_keyboard
 
 # Terminal 5: Save map khi đủ
 cd ~
 ros2 run nav2_map_server map_saver_cli -f my_map
-# Tạo ra: my_map.yaml và my_map.pgm
 ```
 
-**Option B: Dùng map có sẵn**
+### **Bước 5: Build Docker Container**
 
-Nếu bạn đã có map, đảm bảo files nằm ở `~/my_map.yaml` và `~/my_map.pgm`.
+```bash
+cd ~/nemo-agent-toolkit/docker
+./build_container.sh
+```
+
+---
+
+## 🚀 Cách chạy
+
+### **Bước 1: Start ROS2 Environment (Host)**
+
+```bash
+# Terminal 1: Launch Nav2
+export TURTLEBOT3_MODEL=waffle_pi
+ros2 launch nav2_bringup bringup_launch.py \
+    use_sim_time:=True \
+    map:=$HOME/my_map.yaml
+
+# Terminal 2: Launch Gazebo
+ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+
+# Terminal 3: Launch RTSP publisher (if needed)
+cd ~/nemo-agent-toolkit/turtlebot3_ws
+source install/setup.bash
+python3 src/custom_controller/custom_controller/rtsp_publisher.py
+```
+
+### **Bước 2: Set Initial Pose in RViz**
+
+```bash
+# Terminal 4: Launch RViz
+rviz2
+
+# In RViz:
+# 1. Click "2D Pose Estimate" tool
+# 2. Click on robot's position on map
+# 3. Drag to set orientation
+```
+
+### **Bước 3: Run NAT Container**
+
+```bash
+# Terminal 5: Start NAT container
+docker run -it --rm \
+    --network=host \
+    --name nat_container \
+    -e ROS_DOMAIN_ID=0 \
+    -e ROS_LOCALHOST_ONLY=0 \
+    -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+    -v $(pwd)/../multi_function_agent:/workspace/multi_function_agent:rw \
+    -v $(pwd)/../configs:/workspace/configs:ro \
+    --runtime=nvidia \
+    nvidia-nat:latest bash
+```
+
+### **Bước 4: Verify ROS2 Connection**
+
+```bash
+# Inside container
+source /opt/ros/humble/setup.bash
+
+# Check nodes
+ros2 node list
+# Expected: /gazebo, /bt_navigator, /controller_server, /nat_agent_node
+
+# Check topics
+ros2 topic list | grep -E "(cmd_vel|scan|odom)"
+
+# Test echo
+ros2 topic echo /scan --once
+```
+
+### **Bước 5: Run Mission**
+
+```bash
+# Inside container
+nat run --config_file /workspace/configs/config.yml --input "YOUR_MISSION"
+```
+
+**Example Missions:**
+
+```bash
+# Explore với Nav2
+nat run --config_file /workspace/configs/config.yml --input "Run wide automatically in 60 seconds"
+
+# Count objects (YOLO)
+nat run --config_file /workspace/configs/config.yml --input "Đếm 10 chai nước"
+
+# Follow target (Hybrid Nav2 + YOLO)
+nat run --config_file /workspace/configs/config.yml --input "Theo sau người đang đi"
+
+# Patrol laps (Nav2)
+nat run --config_file /workspace/configs/config.yml --input "Đi 5 vòng tròn"
+```
 
 ---
 
 ## 📝 Ghi chú quan trọng
 
-### **Docker Multi-Container Benefits**
+### **Native ROS2 DDS Communication**
 
-✅ **Isolated Environments:**
-- Python 3.11 (NAT) + Python 3.10 (ROS2) no conflict
-- Separate dependencies, no version clashes
+✅ **Benefits:**
+- **Zero HTTP overhead:** Direct DDS communication (<1ms latency)
+- **Real-time callbacks:** Sensor data updates via subscribers
+- **Native Nav2 integration:** Action client works natively
+- **Production-ready:** Same architecture as real hardware
+- **Simplified codebase:** No bridge server maintenance
 
-✅ **Native ROS2 Communication:**
-- Direct DDS network between containers
-- No HTTP bridge overhead for ROS2 topics
-- Nav2 action client works natively
-
-✅ **Scalability:**
-- Easy to add more containers (vision processing, planning)
-- Horizontal scaling possible
-- Service-oriented architecture
-
-✅ **Reproducibility:**
-- Identical environment on any machine
-- Version-locked dependencies
-- Easy deployment to cloud/edge
+✅ **Architecture:**
+- **Host network mode:** Container shares host's network stack
+- **Centralized node:** Single ROS2 node (`core/ros2_node.py`) manages all communication
+- **Thread-safe data access:** Lock-protected sensor data storage
+- **Background spinning:** MultiThreadedExecutor in daemon thread
 
 ---
 
@@ -405,6 +547,59 @@ Nếu bạn đã có map, đảm bảo files nằm ở `~/my_map.yaml` và `~/my
 
 ---
 
+### **Troubleshooting**
+
+**Problem: ros2 node list không thấy nodes**
+```bash
+# Check ROS_DOMAIN_ID
+echo $ROS_DOMAIN_ID  # Phải = 0
+
+# Check if ROS2 running on host
+ps aux | grep ros2
+
+# Restart ROS2 environment
+```
+
+**Problem: No LIDAR data trong container**
+```bash
+# Check topic on host
+ros2 topic hz /scan
+
+# Check QoS compatibility
+ros2 topic info /scan -v
+
+# Inside container
+ros2 topic echo /scan --once
+```
+
+**Problem: Nav2 không nhận goal**
+```bash
+# Check Nav2 status
+ros2 node list | grep bt_navigator
+
+# Set initial pose in RViz (REQUIRED!)
+rviz2  # Use "2D Pose Estimate" tool
+
+# Check action server
+ros2 action list | grep navigate
+```
+
+**Problem: Container không kết nối ROS2**
+```bash
+# Verify host network mode
+docker inspect nat_container | grep NetworkMode
+# Should be "host"
+
+# Check ROS_DOMAIN_ID match
+# Host
+echo $ROS_DOMAIN_ID
+
+# Container
+docker exec nat_container bash -c "echo \$ROS_DOMAIN_ID"
+```
+
+---
+
 ### **Limitations**
 
 **Technical Constraints:**
@@ -414,12 +609,13 @@ Nếu bạn đã có map, đảm bảo files nằm ở `~/my_map.yaml` và `~/my
 - **LLM Dependency**: Requires NIM API for prompt parsing
 - **Single Robot**: No multi-robot coordination
 - **Map Dependency**: Nav2 requires pre-built SLAM map
+- **Host Network Required**: Container must use host network mode for ROS2 DDS
 
 **Known Issues:**
 - Camera resolution fixed at 640x480
 - YOLO confidence threshold: 0.5 (adjustable)
 - Nav2 goal tolerance: 0.2m position, 0.1rad orientation
-- Docker requires ~20GB disk space for images
+- Container requires ROS2 packages (~500MB added to base image)
 
 ---
 
@@ -430,3 +626,4 @@ Nếu bạn đã có map, đảm bảo files nằm ở `~/my_map.yaml` và `~/my
 - [TurtleBot3 Documentation](https://emanual.robotis.com/docs/en/platform/turtlebot3/overview/)
 - [Ultralytics YOLO](https://docs.ultralytics.com/)
 - [Docker Documentation](https://docs.docker.com/)
+- [FastRTPS Documentation](https://fast-dds.docs.eprosima.com/)
