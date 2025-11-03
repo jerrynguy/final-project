@@ -131,165 +131,137 @@ except Exception as e:
                 return None
     
     def _start_monitor(self):
-        """Start background thread to monitor sensor data."""
+        """Start persistent subprocess daemon."""
         self._running = True
+        self._daemon_process = subprocess.Popen(
+            [self.system_python, '-c', self._get_daemon_script()],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1
+        )
+        
+        # Thread to read daemon output
         self._monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            daemon=True,
-            name="ROS2Monitor"
+            target=self._read_daemon_output,
+            daemon=True
         )
         self._monitor_thread.start()
-        logger.info("✅ Sensor monitor started")
-    
-    def _monitor_loop(self):
-        """Background loop to fetch sensor data."""
+        logger.info("✅ ROS2 daemon started")
+
+    def _get_daemon_script(self) -> str:
+        """Persistent ROS2 node script."""
+        return """
+    import rclpy
+    from sensor_msgs.msg import LaserScan
+    from nav_msgs.msg import Odometry
+    import json
+    import sys
+    import math
+
+    class SensorNode:
+        def __init__(self):
+            rclpy.init()
+            self.node = rclpy.create_node('sensor_daemon')
+            
+            self.lidar_sub = self.node.create_subscription(
+                LaserScan, '/scan', self.lidar_callback, 10)
+            self.odom_sub = self.node.create_subscription(
+                Odometry, '/odom', self.odom_callback, 10)
+            
+            self.lidar_data = None
+            self.odom_data = None
+        
+        def lidar_callback(self, msg):
+            self.lidar_data = {
+                'ranges': list(msg.ranges),
+                'angle_min': msg.angle_min,
+                'angle_max': msg.angle_max,
+                'angle_increment': msg.angle_increment,
+                'range_min': msg.range_min,
+                'range_max': msg.range_max
+            }
+            print(json.dumps({'type': 'lidar', 'data': self.lidar_data}), flush=True)
+        
+        def odom_callback(self, msg):
+            q = msg.pose.pose.orientation
+            siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            
+            self.odom_data = {
+                'position': {
+                    'x': msg.pose.pose.position.x,
+                    'y': msg.pose.pose.position.y,
+                    'z': msg.pose.pose.position.z
+                },
+                'orientation': {'yaw': yaw},
+                'velocity': {
+                    'linear': msg.twist.twist.linear.x,
+                    'angular': msg.twist.twist.angular.z
+                }
+            }
+            print(json.dumps({'type': 'odom', 'data': self.odom_data}), flush=True)
+        
+        def spin(self):
+            try:
+                rclpy.spin(self.node)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                self.node.destroy_node()
+                rclpy.shutdown()
+
+    if __name__ == '__main__':
+        node = SensorNode()
+        node.spin()
+    """
+
+    def _read_daemon_output(self):
+        """Read sensor data from daemon stdout."""
         while self._running:
             try:
-                # Fetch LIDAR data
-                self._fetch_lidar()
+                line = self._daemon_process.stdout.readline()
+                if not line:
+                    break
                 
-                # Fetch odometry data
-                self._fetch_odom()
+                msg = json.loads(line.strip())
+                msg_type = msg['type']
+                data = msg['data']
                 
-                time.sleep(0.1)  # 10Hz update
-                
+                with self._lock:
+                    if msg_type == 'lidar':
+                        class LaserScanData:
+                            def __init__(self, d):
+                                self.ranges = d['ranges']
+                                self.angle_min = d['angle_min']
+                                self.angle_max = d['angle_max']
+                                self.angle_increment = d['angle_increment']
+                                self.range_min = d['range_min']
+                                self.range_max = d['range_max']
+                        self._lidar_cache = LaserScanData(data)
+                    
+                    elif msg_type == 'odom':
+                        self._odom_cache = data
+            
+            except json.JSONDecodeError:
+                continue
             except Exception as e:
-                logger.debug(f"Monitor error: {e}")
-                time.sleep(0.5)
-    
-    def _fetch_lidar(self):
-        """Fetch LIDAR data via subprocess."""
-        script = """
-import rclpy
-from sensor_msgs.msg import LaserScan
-import json
-import sys
+                logger.error(f"Daemon read error: {e}")
+                break
 
-data_received = False
-
-def callback(msg):
-    global data_received
-    data = {
-        'ranges': list(msg.ranges),
-        'angle_min': msg.angle_min,
-        'angle_max': msg.angle_max,
-        'angle_increment': msg.angle_increment,
-        'range_min': msg.range_min,
-        'range_max': msg.range_max
-    }
-    print(json.dumps(data))
-    data_received = True
-
-try:
-    rclpy.init()
-    node = rclpy.create_node('lidar_monitor')
-    sub = node.create_subscription(LaserScan, '/scan', callback, 10)
-    
-    # Wait for one message
-    start = rclpy.clock.Clock().now()
-    while not data_received and (rclpy.clock.Clock().now() - start).nanoseconds < 1e9:
-        rclpy.spin_once(node, timeout_sec=0.1)
-    
-    node.destroy_node()
-    rclpy.shutdown()
-except:
-    pass
-"""
-        try:
-            result = subprocess.run(
-                [self.system_python, '-c', script],
-                capture_output=True,
-                text=True,
-                timeout=1.5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                data = json.loads(result.stdout)
-                # Convert to object-like dict
-                class LaserScanData:
-                    def __init__(self, d):
-                        self.ranges = d['ranges']
-                        self.angle_min = d['angle_min']
-                        self.angle_max = d['angle_max']
-                        self.angle_increment = d['angle_increment']
-                        self.range_min = d['range_min']
-                        self.range_max = d['range_max']
-                
-                with self._lock:
-                    self._lidar_cache = LaserScanData(data)
-        except:
-            pass
-    
-    def _fetch_odom(self):
-        """Fetch odometry data via subprocess."""
-        script = """
-import rclpy
-from nav_msgs.msg import Odometry
-import json
-import sys
-import math
-
-data_received = False
-
-def callback(msg):
-    global data_received
-    q = msg.pose.pose.orientation
-    
-    # Convert quaternion to yaw
-    siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-    
-    data = {
-        'position': {
-            'x': msg.pose.pose.position.x,
-            'y': msg.pose.pose.position.y,
-            'z': msg.pose.pose.position.z
-        },
-        'orientation': {
-            'yaw': yaw
-        },
-        'velocity': {
-            'linear': msg.twist.twist.linear.x,
-            'angular': msg.twist.twist.angular.z
-        }
-    }
-    print(json.dumps(data))
-    data_received = True
-
-try:
-    rclpy.init()
-    node = rclpy.create_node('odom_monitor')
-    sub = node.create_subscription(Odometry, '/odom', callback, 10)
-    
-    # Wait for one message
-    start = rclpy.clock.Clock().now()
-    while not data_received and (rclpy.clock.Clock().now() - start).nanoseconds < 1e9:
-        rclpy.spin_once(node, timeout_sec=0.1)
-    
-    node.destroy_node()
-    rclpy.shutdown()
-except:
-    pass
-"""
-        try:
-            result = subprocess.run(
-                [self.system_python, '-c', script],
-                capture_output=True,
-                text=True,
-                timeout=1.5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                data = json.loads(result.stdout)
-                with self._lock:
-                    self._odom_cache = data
-        except:
-            pass
-    
     def shutdown(self):
         """Shutdown bridge."""
         self._running = False
+        
+        if hasattr(self, '_daemon_process'):
+            self._daemon_process.terminate()
+            self._daemon_process.wait(timeout=2)
+        
         if self._monitor_thread:
             self._monitor_thread.join(timeout=2)
+        
         logger.info("✅ ROS2Bridge shutdown")
 
 
