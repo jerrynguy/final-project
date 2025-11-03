@@ -272,10 +272,6 @@ class RobotControllerInterface(Node):
         
         logger.info("Waiting for Nav2 to be ready...")
         
-        # BRIDGE MODE: Nav2 uses native ROS2, not bridge
-        if self.use_bridge:
-            logger.info("Bridge mode: Nav2 uses native ROS2 interface")
-        
         # Wait for Nav2 action server
         ready = self.nav2_interface.wait_for_nav2(timeout=timeout)
         
@@ -465,14 +461,13 @@ class RobotControllerInterface(Node):
     
     async def _emergency_stop(self) -> bool:
         try:
-            # Old
-            stop_twist = Twist()
-            self.cmd_vel_pub.publish(stop_twist)
-            
-            # New
             self.ros_node.publish_stop()
             
-            self.robot_status.state = RobotState.IDLE
+            # Update status using private attribute
+            if not hasattr(self, '_robot_status'):
+                self._robot_status = RobotStatus()
+            self._robot_status.state = RobotState.IDLE
+            
             logger.warning("Emergency stop executed")
             return True
             
@@ -481,15 +476,15 @@ class RobotControllerInterface(Node):
             return False
     
     def _update_robot_state(self, action: str):
-        """
-        Update robot state based on action.
-        """
-        if action == 'stop':
-            self.robot_status.state = RobotState.IDLE
-        else:
-            self.robot_status.state = RobotState.MOVING
+        if not hasattr(self, '_robot_status'):
+            self._robot_status = RobotStatus()
         
-        self.robot_status.last_update = time.time()
+        if action == 'stop':
+            self._robot_status.state = RobotState.IDLE
+        else:
+            self._robot_status.state = RobotState.MOVING
+        
+        self._robot_status.last_update = time.time()
     
     def _publish_status(self, message: str):
         """

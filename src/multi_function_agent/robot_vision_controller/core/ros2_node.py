@@ -1,295 +1,320 @@
 """
-ROS2 Node Module
-Centralized ROS2 node for NAT Agent container.
-Replaces HTTP bridge with native DDS communication.
+ROS2 Node Module - Subprocess Wrapper
+Uses system Python 3.10 with rclpy via subprocess.
+Works with Python 3.12/3.11 venv without building from source.
 """
 
+import subprocess
+import json
 import logging
 import threading
-from typing import Optional, Callable
-
-import rclpy
-from rclpy.node import Node
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-
-from geometry_msgs.msg import Twist
-from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import Odometry
+import time
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 
-class NATAgentNode(Node):
+class ROS2Bridge:
     """
-    Centralized ROS2 node for NAT Agent.
-    Manages all publishers, subscribers, and provides data access.
+    Bridge between Python 3.11+ (NAT) and Python 3.10 (ROS2).
+    Uses subprocess to call system Python with rclpy.
     """
     
     def __init__(self):
-        """Initialize NAT Agent ROS2 node."""
-        super().__init__('nat_agent_node')
+        self.system_python = '/usr/bin/python3'  # System Python 3.10
+        self._lidar_cache = None
+        self._odom_cache = None
+        self._monitor_thread = None
+        self._running = False
+        self._lock = threading.Lock()
         
-        # QoS profiles
-        self.qos_reliable = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
+        # Verify ROS2 available
+        self._verify_ros2()
         
-        self.qos_best_effort = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
+        # Start background monitor for sensor data
+        self._start_monitor()
         
-        # =====================================================================
-        # Publishers
-        # =====================================================================
-        self.cmd_vel_pub = self.create_publisher(
-            Twist,
-            '/cmd_vel',
-            self.qos_reliable
-        )
-        
-        # =====================================================================
-        # Subscribers
-        # =====================================================================
-        self.scan_sub = self.create_subscription(
-            LaserScan,
-            '/scan',
-            self._scan_callback,
-            self.qos_best_effort  # LIDAR typically uses best_effort
-        )
-        
-        self.odom_sub = self.create_subscription(
-            Odometry,
-            '/odom',
-            self._odom_callback,
-            self.qos_reliable
-        )
-        
-        # =====================================================================
-        # Data Storage (thread-safe access)
-        # =====================================================================
-        self._data_lock = threading.Lock()
-        self.latest_scan: Optional[LaserScan] = None
-        self.latest_odom: Optional[Odometry] = None
-        
-        # =====================================================================
-        # Callback hooks (optional)
-        # =====================================================================
-        self.scan_callback_hook: Optional[Callable] = None
-        self.odom_callback_hook: Optional[Callable] = None
-        
-        logger.info("✅ NATAgentNode initialized")
-        logger.info("   Publishers: /cmd_vel")
-        logger.info("   Subscribers: /scan, /odom")
+        logger.info("✅ ROS2Bridge initialized (subprocess mode)")
     
-    # =========================================================================
-    # Subscriber Callbacks
-    # =========================================================================
+    def get_name(self):
+        """Get node name (compatibility)."""
+        return "ros2_bridge_subprocess"
     
-    def _scan_callback(self, msg: LaserScan):
-        """Store latest LIDAR scan."""
-        with self._data_lock:
-            self.latest_scan = msg
-        
-        # Call external hook if registered
-        if self.scan_callback_hook:
-            try:
-                self.scan_callback_hook(msg)
-            except Exception as e:
-                logger.error(f"Scan callback hook error: {e}")
-    
-    def _odom_callback(self, msg: Odometry):
-        """Store latest odometry."""
-        with self._data_lock:
-            self.latest_odom = msg
-        
-        # Call external hook if registered
-        if self.odom_callback_hook:
-            try:
-                self.odom_callback_hook(msg)
-            except Exception as e:
-                logger.error(f"Odom callback hook error: {e}")
-    
-    # =========================================================================
-    # Data Access Methods (thread-safe)
-    # =========================================================================
-    
-    def get_scan(self) -> Optional[LaserScan]:
-        """Get latest LIDAR scan (thread-safe)."""
-        with self._data_lock:
-            return self.latest_scan
-    
-    def get_odom(self) -> Optional[Odometry]:
-        """Get latest odometry (thread-safe)."""
-        with self._data_lock:
-            return self.latest_odom
-    
-    def get_robot_pose(self) -> Optional[dict]:
-        """
-        Get robot pose from odometry.
-        Returns: {'x': float, 'y': float, 'theta': float} or None
-        """
-        odom = self.get_odom()
-        if odom is None:
-            return None
-        
+    def _verify_ros2(self):
+        """Verify system Python has rclpy."""
         try:
-            from tf_transformations import euler_from_quaternion
-            
-            q = odom.pose.pose.orientation
-            _, _, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
-            
-            return {
-                'x': odom.pose.pose.position.x,
-                'y': odom.pose.pose.position.y,
-                'theta': yaw
-            }
+            result = subprocess.run(
+                [self.system_python, '-c', 'import rclpy; print("OK")'],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"rclpy not available: {result.stderr}")
+            logger.info("✅ System Python has rclpy")
         except Exception as e:
-            logger.error(f"Failed to extract pose: {e}")
-            return None
-    
-    # =========================================================================
-    # Command Publishing
-    # =========================================================================
+            logger.error(f"❌ ROS2 verification failed: {e}")
+            raise
     
     def publish_velocity(self, linear: float, angular: float):
-        """
-        Publish velocity command.
-        
-        Args:
-            linear: Linear velocity (m/s)
-            angular: Angular velocity (rad/s)
-        """
-        msg = Twist()
-        msg.linear.x = float(linear)
-        msg.angular.z = float(angular)
-        
-        self.cmd_vel_pub.publish(msg)
+        """Publish velocity command via subprocess."""
+        script = f"""
+import rclpy
+from geometry_msgs.msg import Twist
+
+try:
+    rclpy.init()
+    node = rclpy.create_node('cmd_vel_publisher')
+    pub = node.create_publisher(Twist, '/cmd_vel', 10)
+    
+    # Wait for publisher to be ready
+    import time
+    time.sleep(0.01)
+    
+    msg = Twist()
+    msg.linear.x = {linear}
+    msg.angular.z = {angular}
+    
+    pub.publish(msg)
+    
+    # Cleanup
+    node.destroy_node()
+    rclpy.shutdown()
+    
+except Exception as e:
+    import sys
+    print(f"ERROR: {{e}}", file=sys.stderr)
+    sys.exit(1)
+"""
+        try:
+            result = subprocess.run(
+                [self.system_python, '-c', script],
+                capture_output=True,
+                text=True,
+                timeout=0.5
+            )
+            if result.returncode != 0:
+                logger.error(f"Publish failed: {result.stderr}")
+                return
+        except subprocess.TimeoutExpired:
+            logger.warning("Publish timeout (non-critical)")
+        except Exception as e:
+            logger.error(f"Publish error: {e}")
     
     def publish_stop(self):
         """Publish stop command."""
         self.publish_velocity(0.0, 0.0)
-
-
-# =============================================================================
-# ROS2 Manager (Singleton Pattern)
-# =============================================================================
-
-class ROS2Manager:
-    """
-    Singleton manager for ROS2 node lifecycle.
-    Ensures only one node instance and one executor.
-    """
     
-    _instance = None
-    _lock = threading.Lock()
+    def get_scan(self) -> Optional[Any]:
+        """Get cached LIDAR data (returns dict-like object)."""
+        with self._lock:
+            return self._lidar_cache
     
-    def __new__(cls):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super().__new__(cls)
-                cls._instance._initialized = False
-            return cls._instance
+    def get_odom(self) -> Optional[Any]:
+        """Get cached odometry data (returns dict-like object)."""
+        with self._lock:
+            return self._odom_cache
     
-    def __init__(self):
-        if self._initialized:
-            return
-        
-        self.node: Optional[NATAgentNode] = None
-        self.executor: Optional[MultiThreadedExecutor] = None
-        self.spin_thread: Optional[threading.Thread] = None
-        self._initialized = True
-        
-        logger.info("ROS2Manager created")
+    def get_robot_pose(self) -> Optional[Dict]:
+        """Get robot pose from cached odometry."""
+        with self._lock:
+            if not self._odom_cache:
+                return None
+            
+            try:
+                return {
+                    'x': self._odom_cache['position']['x'],
+                    'y': self._odom_cache['position']['y'],
+                    'theta': self._odom_cache['orientation']['yaw']
+                }
+            except (KeyError, TypeError):
+                return None
     
-    def initialize(self) -> NATAgentNode:
-        """
-        Initialize ROS2 context and create node.
-        """
-        if self.node is not None:
-            logger.warning("ROS2 already initialized")
-            return self.node
-        
-        # Initialize rclpy if not already
-        if not rclpy.ok():
-            logger.info("Initializing rclpy...")
-            rclpy.init()
-        
-        # Create node
-        logger.info("Creating NATAgentNode...")
-        self.node = NATAgentNode()
-        
-        # Create executor
-        self.executor = MultiThreadedExecutor()
-        self.executor.add_node(self.node)
-        
-        # Start spinning in background thread
-        self.spin_thread = threading.Thread(
-            target=self._spin_loop,
+    def _start_monitor(self):
+        """Start background thread to monitor sensor data."""
+        self._running = True
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_loop,
             daemon=True,
-            name="ROS2SpinThread"
+            name="ROS2Monitor"
         )
-        self.spin_thread.start()
-        
-        logger.info("✅ ROS2 node spinning in background")
-        
-        return self.node
+        self._monitor_thread.start()
+        logger.info("✅ Sensor monitor started")
     
-    def _spin_loop(self):
-        """Background thread for spinning executor."""
+    def _monitor_loop(self):
+        """Background loop to fetch sensor data."""
+        while self._running:
+            try:
+                # Fetch LIDAR data
+                self._fetch_lidar()
+                
+                # Fetch odometry data
+                self._fetch_odom()
+                
+                time.sleep(0.1)  # 10Hz update
+                
+            except Exception as e:
+                logger.debug(f"Monitor error: {e}")
+                time.sleep(0.5)
+    
+    def _fetch_lidar(self):
+        """Fetch LIDAR data via subprocess."""
+        script = """
+import rclpy
+from sensor_msgs.msg import LaserScan
+import json
+import sys
+
+data_received = False
+
+def callback(msg):
+    global data_received
+    data = {
+        'ranges': list(msg.ranges),
+        'angle_min': msg.angle_min,
+        'angle_max': msg.angle_max,
+        'angle_increment': msg.angle_increment,
+        'range_min': msg.range_min,
+        'range_max': msg.range_max
+    }
+    print(json.dumps(data))
+    data_received = True
+
+try:
+    rclpy.init()
+    node = rclpy.create_node('lidar_monitor')
+    sub = node.create_subscription(LaserScan, '/scan', callback, 10)
+    
+    # Wait for one message
+    start = rclpy.clock.Clock().now()
+    while not data_received and (rclpy.clock.Clock().now() - start).nanoseconds < 1e9:
+        rclpy.spin_once(node, timeout_sec=0.1)
+    
+    node.destroy_node()
+    rclpy.shutdown()
+except:
+    pass
+"""
         try:
-            logger.info("ROS2 spin thread started")
-            self.executor.spin()
-        except Exception as e:
-            logger.error(f"ROS2 spin error: {e}")
+            result = subprocess.run(
+                [self.system_python, '-c', script],
+                capture_output=True,
+                text=True,
+                timeout=1.5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                data = json.loads(result.stdout)
+                # Convert to object-like dict
+                class LaserScanData:
+                    def __init__(self, d):
+                        self.ranges = d['ranges']
+                        self.angle_min = d['angle_min']
+                        self.angle_max = d['angle_max']
+                        self.angle_increment = d['angle_increment']
+                        self.range_min = d['range_min']
+                        self.range_max = d['range_max']
+                
+                with self._lock:
+                    self._lidar_cache = LaserScanData(data)
+        except:
+            pass
     
-    def get_node(self) -> Optional[NATAgentNode]:
-        """Get existing node instance."""
-        return self.node
+    def _fetch_odom(self):
+        """Fetch odometry data via subprocess."""
+        script = """
+import rclpy
+from nav_msgs.msg import Odometry
+import json
+import sys
+import math
+
+data_received = False
+
+def callback(msg):
+    global data_received
+    q = msg.pose.pose.orientation
+    
+    # Convert quaternion to yaw
+    siny_cosp = 2 * (q.w * q.z + q.x * q.y)
+    cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    
+    data = {
+        'position': {
+            'x': msg.pose.pose.position.x,
+            'y': msg.pose.pose.position.y,
+            'z': msg.pose.pose.position.z
+        },
+        'orientation': {
+            'yaw': yaw
+        },
+        'velocity': {
+            'linear': msg.twist.twist.linear.x,
+            'angular': msg.twist.twist.angular.z
+        }
+    }
+    print(json.dumps(data))
+    data_received = True
+
+try:
+    rclpy.init()
+    node = rclpy.create_node('odom_monitor')
+    sub = node.create_subscription(Odometry, '/odom', callback, 10)
+    
+    # Wait for one message
+    start = rclpy.clock.Clock().now()
+    while not data_received and (rclpy.clock.Clock().now() - start).nanoseconds < 1e9:
+        rclpy.spin_once(node, timeout_sec=0.1)
+    
+    node.destroy_node()
+    rclpy.shutdown()
+except:
+    pass
+"""
+        try:
+            result = subprocess.run(
+                [self.system_python, '-c', script],
+                capture_output=True,
+                text=True,
+                timeout=1.5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                data = json.loads(result.stdout)
+                with self._lock:
+                    self._odom_cache = data
+        except:
+            pass
     
     def shutdown(self):
-        """Shutdown ROS2 node and executor."""
-        if self.executor:
-            logger.info("Shutting down ROS2 executor...")
-            self.executor.shutdown()
-        
-        if self.node:
-            logger.info("Destroying ROS2 node...")
-            self.node.destroy_node()
-        
-        if rclpy.ok():
-            logger.info("Shutting down rclpy...")
-            rclpy.shutdown()
-        
-        self.node = None
-        self.executor = None
-        self.spin_thread = None
-        
-        logger.info("✅ ROS2 shutdown complete")
+        """Shutdown bridge."""
+        self._running = False
+        if self._monitor_thread:
+            self._monitor_thread.join(timeout=2)
+        logger.info("✅ ROS2Bridge shutdown")
 
 
 # =============================================================================
-# Convenience Functions
+# Singleton Management
 # =============================================================================
 
-def get_ros2_node() -> NATAgentNode:
-    """
-    Get or create ROS2 node instance.
-    """
-    manager = ROS2Manager()
-    node = manager.get_node()
-    
-    if node is None:
-        node = manager.initialize()
-    
-    return node
+_bridge_instance = None
+_bridge_lock = threading.Lock()
 
+def get_ros2_node():
+    """Get or create ROS2 bridge instance."""
+    global _bridge_instance
+    
+    with _bridge_lock:
+        if _bridge_instance is None:
+            _bridge_instance = ROS2Bridge()
+    
+    return _bridge_instance
 
 def shutdown_ros2():
-    """Shutdown ROS2 manager."""
-    manager = ROS2Manager()
-    manager.shutdown()
+    """Shutdown ROS2 bridge."""
+    global _bridge_instance
+    
+    with _bridge_lock:
+        if _bridge_instance:
+            _bridge_instance.shutdown()
+            _bridge_instance = None

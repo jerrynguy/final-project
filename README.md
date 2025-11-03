@@ -38,7 +38,7 @@ multi_function_agent/
         │   ├── query_extractor.py                # Prompt information extraction
         │   ├── goal_parser.py                    # LLM mission parser 
         │   ├── mission_controller.py             # Mission state machine
-        │   ├── ros2_node.py                      # ✅ NEW: Centralized ROS2 node
+        │   ├── ros2_node.py                      # Centralized ROS2 node
         │   └── models.py                         # YOLO model management
         ├── navigation/
         │   ├── nav2_interface.py                 # Nav2 Python interface
@@ -148,22 +148,22 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 ┌─────────────────────────────────────────────────────────────┐
 │                    HOST MACHINE                             │
 │                                                             │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │   ROS2 Humble (Native)                              │  │
-│  │   - Gazebo + Nav2 + TurtleBot3                      │  │
-│  │   - Topics: /cmd_vel, /scan, /odom, /map           │  │
-│  └──────────────────┬──────────────────────────────────┘  │
-│                     │                                      │
-│                     │ ROS2 DDS Network (FastRTPS)          │
-│                     │ (Host Network Mode)                  │
-│                     │                                      │
-│  ┌──────────────────▼──────────────────────────────────┐  │
-│  │   NAT Container (nvidia-nat)                        │  │
-│  │   - Python 3.12 + ROS2 Client Libraries            │  │
-│  │   - core/ros2_node.py (Centralized Node)           │  │
-│  │   - Direct pub/sub: /cmd_vel, /scan, /odom         │  │
-│  │   - Nav2 action client: /navigate_to_pose          │  │
-│  │   - AI Agent + YOLO + Mission Controller            │  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │   ROS2 Humble (Native)                              │    │
+│  │   - Gazebo + Nav2 + TurtleBot3                      │    │
+│  │   - Topics: /cmd_vel, /scan, /odom, /map            │    │
+│  └──────────────────┬──────────────────────────────────┘    │
+│                     │                                       │
+│                     │ ROS2 DDS Network (FastRTPS)           │
+│                     │ (Host Network Mode)                   │
+│                     │                                       │
+│  ┌──────────────────▼──────────────────────────────────┐    │
+│  │   NAT Container (nvidia-nat)                        │    │
+│  │   - Python 3.12 + ROS2 Client Libraries             │    │
+│  │   - core/ros2_node.py (Centralized Node)            │    │
+│  │   - Direct pub/sub: /cmd_vel, /scan, /odom          │    │
+│  │   - Nav2 action client: /navigate_to_pose           │    │
+│  │   - AI Agent + YOLO + Mission Controller            │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
