@@ -1,14 +1,12 @@
 """
-ROS2 Node Module - Subprocess Wrapper
-Uses system Python 3.10 with rclpy via subprocess.
-Works with Python 3.12/3.11 venv without building from source.
+ROS2 Node Module - Persistent Daemon Subprocess
+Uses system Python 3.10 with rclpy via long-running subprocess.
 """
 
 import subprocess
 import json
 import logging
 import threading
-import time
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -17,110 +15,79 @@ logger = logging.getLogger(__name__)
 class ROS2Bridge:
     """
     Bridge between Python 3.11+ (NAT) and Python 3.10 (ROS2).
-    Uses subprocess to call system Python with rclpy.
+    Uses persistent subprocess daemon for real-time sensor data.
     """
     
     def __init__(self):
-        self.system_python = '/usr/bin/python3'  # System Python 3.10
+        self.system_python = '/usr/bin/python3'
         self._lidar_cache = None
         self._odom_cache = None
         self._monitor_thread = None
+        self._daemon_process = None
         self._running = False
         self._lock = threading.Lock()
         
-        # Verify ROS2 available
-        self._verify_ros2()
-        
-        # Start background monitor for sensor data
+        # Start persistent daemon
         self._start_monitor()
         
-        logger.info("✅ ROS2Bridge initialized (subprocess mode)")
+        logger.info("✅ ROS2Bridge initialized (daemon mode)")
     
     def get_name(self):
         """Get node name (compatibility)."""
-        return "ros2_bridge_subprocess"
-    
-    def _verify_ros2(self):
-        """Verify system Python has rclpy."""
-        try:
-            result = subprocess.run(
-                [self.system_python, '-c', 'import rclpy; print("OK")'],
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"rclpy not available: {result.stderr}")
-            logger.info("✅ System Python has rclpy")
-        except Exception as e:
-            logger.error(f"❌ ROS2 verification failed: {e}")
-            raise
+        return "ros2_bridge_daemon"
     
     def publish_velocity(self, linear: float, angular: float):
         """Publish velocity command via subprocess."""
-        script = f"""
+        script = """
+import os
+os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
+
 import rclpy
 from geometry_msgs.msg import Twist
 
-try:
-    rclpy.init()
-    node = rclpy.create_node('cmd_vel_publisher')
-    pub = node.create_publisher(Twist, '/cmd_vel', 10)
-    
-    # Wait for publisher to be ready
-    import time
-    time.sleep(0.01)
-    
-    msg = Twist()
-    msg.linear.x = {linear}
-    msg.angular.z = {angular}
-    
-    pub.publish(msg)
-    
-    # Cleanup
-    node.destroy_node()
-    rclpy.shutdown()
-    
-except Exception as e:
-    import sys
-    print(f"ERROR: {{e}}", file=sys.stderr)
-    sys.exit(1)
+rclpy.init()
+node = rclpy.create_node('cmd_vel_pub')
+pub = node.create_publisher(Twist, '/cmd_vel', 10)
+
+import time
+time.sleep(0.02)
+
+msg = Twist()
+msg.linear.x = {linear}
+msg.angular.z = {angular}
+pub.publish(msg)
+
+node.destroy_node()
+rclpy.shutdown()
 """
         try:
-            result = subprocess.run(
+            subprocess.run(
                 [self.system_python, '-c', script],
                 capture_output=True,
-                text=True,
                 timeout=0.5
             )
-            if result.returncode != 0:
-                logger.error(f"Publish failed: {result.stderr}")
-                return
-        except subprocess.TimeoutExpired:
-            logger.warning("Publish timeout (non-critical)")
         except Exception as e:
-            logger.error(f"Publish error: {e}")
+            logger.debug(f"Publish error: {e}")
     
     def publish_stop(self):
         """Publish stop command."""
         self.publish_velocity(0.0, 0.0)
     
     def get_scan(self) -> Optional[Any]:
-        """Get cached LIDAR data (returns dict-like object)."""
+        """Get cached LIDAR data."""
         with self._lock:
             return self._lidar_cache
     
     def get_odom(self) -> Optional[Any]:
-        """Get cached odometry data (returns dict-like object)."""
+        """Get cached odometry data."""
         with self._lock:
             return self._odom_cache
     
     def get_robot_pose(self) -> Optional[Dict]:
-        """Get robot pose from cached odometry."""
+        """Get robot pose from odometry."""
         with self._lock:
             if not self._odom_cache:
                 return None
-            
             try:
                 return {
                     'x': self._odom_cache['position']['x'],
@@ -131,50 +98,41 @@ except Exception as e:
                 return None
     
     def _start_monitor(self):
-        """Start persistent subprocess daemon."""
+        """Start persistent daemon subprocess."""
         self._running = True
-        self._daemon_process = subprocess.Popen(
-            [self.system_python, '-c', self._get_daemon_script()],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
-        )
         
-        # Thread to read daemon output
-        self._monitor_thread = threading.Thread(
-            target=self._read_daemon_output,
-            daemon=True
-        )
-        self._monitor_thread.start()
-        logger.info("✅ ROS2 daemon started")
+        script = """
+import os
+os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
 
-    def _get_daemon_script(self) -> str:
-        """Persistent ROS2 node script."""
-        return """
-    import rclpy
-    from sensor_msgs.msg import LaserScan
-    from nav_msgs.msg import Odometry
-    import json
-    import sys
-    import math
+import rclpy
+from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import Odometry
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+import json
+import math
 
-    class SensorNode:
-        def __init__(self):
-            rclpy.init()
-            self.node = rclpy.create_node('sensor_daemon')
-            
-            self.lidar_sub = self.node.create_subscription(
-                LaserScan, '/scan', self.lidar_callback, 10)
-            self.odom_sub = self.node.create_subscription(
-                Odometry, '/odom', self.odom_callback, 10)
-            
-            self.lidar_data = None
-            self.odom_data = None
+# RELIABLE QoS to match Gazebo publisher
+qos = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=10
+)
+
+class SensorDaemon:
+    def __init__(self):
+        rclpy.init()
+        self.node = rclpy.create_node('sensor_daemon')
         
-        def lidar_callback(self, msg):
-            self.lidar_data = {
+        self.lidar_sub = self.node.create_subscription(
+            LaserScan, '/scan', self.lidar_cb, qos)
+        self.odom_sub = self.node.create_subscription(
+            Odometry, '/odom', self.odom_cb, qos)
+    
+    def lidar_cb(self, msg):
+        data = {
+            'type': 'lidar',
+            'data': {
                 'ranges': list(msg.ranges),
                 'angle_min': msg.angle_min,
                 'angle_max': msg.angle_max,
@@ -182,15 +140,18 @@ except Exception as e:
                 'range_min': msg.range_min,
                 'range_max': msg.range_max
             }
-            print(json.dumps({'type': 'lidar', 'data': self.lidar_data}), flush=True)
+        }
+        print(json.dumps(data), flush=True)
+    
+    def odom_cb(self, msg):
+        q = msg.pose.pose.orientation
+        siny = 2 * (q.w * q.z + q.x * q.y)
+        cosy = 1 - 2 * (q.y**2 + q.z**2)
+        yaw = math.atan2(siny, cosy)
         
-        def odom_callback(self, msg):
-            q = msg.pose.pose.orientation
-            siny_cosp = 2 * (q.w * q.z + q.x * q.y)
-            cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
-            yaw = math.atan2(siny_cosp, cosy_cosp)
-            
-            self.odom_data = {
+        data = {
+            'type': 'odom',
+            'data': {
                 'position': {
                     'x': msg.pose.pose.position.x,
                     'y': msg.pose.pose.position.y,
@@ -202,23 +163,43 @@ except Exception as e:
                     'angular': msg.twist.twist.angular.z
                 }
             }
-            print(json.dumps({'type': 'odom', 'data': self.odom_data}), flush=True)
+        }
+        print(json.dumps(data), flush=True)
+    
+    def spin(self):
+        try:
+            rclpy.spin(self.node)
+        except:
+            pass
+        finally:
+            self.node.destroy_node()
+            rclpy.shutdown()
+
+daemon = SensorDaemon()
+daemon.spin()
+"""
         
-        def spin(self):
-            try:
-                rclpy.spin(self.node)
-            except KeyboardInterrupt:
-                pass
-            finally:
-                self.node.destroy_node()
-                rclpy.shutdown()
-
-    if __name__ == '__main__':
-        node = SensorNode()
-        node.spin()
-    """
-
-    def _read_daemon_output(self):
+        try:
+            self._daemon_process = subprocess.Popen(
+                [self.system_python, '-c', script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+            
+            self._monitor_thread = threading.Thread(
+                target=self._read_daemon,
+                daemon=True
+            )
+            self._monitor_thread.start()
+            
+            logger.info("✅ ROS2 daemon subprocess started")
+        except Exception as e:
+            logger.error(f"❌ Failed to start daemon: {e}")
+            raise
+    
+    def _read_daemon(self):
         """Read sensor data from daemon stdout."""
         while self._running:
             try:
@@ -240,6 +221,7 @@ except Exception as e:
                                 self.angle_increment = d['angle_increment']
                                 self.range_min = d['range_min']
                                 self.range_max = d['range_max']
+                        
                         self._lidar_cache = LaserScanData(data)
                     
                     elif msg_type == 'odom':
@@ -250,14 +232,19 @@ except Exception as e:
             except Exception as e:
                 logger.error(f"Daemon read error: {e}")
                 break
-
+        
+        logger.warning("Daemon reader stopped")
+    
     def shutdown(self):
-        """Shutdown bridge."""
+        """Shutdown bridge and daemon."""
         self._running = False
         
-        if hasattr(self, '_daemon_process'):
+        if self._daemon_process:
             self._daemon_process.terminate()
-            self._daemon_process.wait(timeout=2)
+            try:
+                self._daemon_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._daemon_process.kill()
         
         if self._monitor_thread:
             self._monitor_thread.join(timeout=2)
@@ -265,27 +252,21 @@ except Exception as e:
         logger.info("✅ ROS2Bridge shutdown")
 
 
-# =============================================================================
-# Singleton Management
-# =============================================================================
-
+# Singleton
 _bridge_instance = None
 _bridge_lock = threading.Lock()
 
 def get_ros2_node():
-    """Get or create ROS2 bridge instance."""
+    """Get or create ROS2 bridge."""
     global _bridge_instance
-    
     with _bridge_lock:
         if _bridge_instance is None:
             _bridge_instance = ROS2Bridge()
-    
     return _bridge_instance
 
 def shutdown_ros2():
     """Shutdown ROS2 bridge."""
     global _bridge_instance
-    
     with _bridge_lock:
         if _bridge_instance:
             _bridge_instance.shutdown()

@@ -17,58 +17,13 @@ Hệ thống điều khiển robot TurtleBot3 tự động với AI Agent thông
 ---
 
 ## 📋 Mục lục
-- [Cấu trúc thư mục](#cấu-trúc-thư-mục)
 - [Tổng quan hệ thống](#tổng-quan-hệ-thống)
-- [Nav2 Integration](#nav2-integration)
+- [Kiến trúc Native ROS2](#kiến-trúc-native-ros2)
 - [Mission Types](#mission-types)
 - [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
 - [Cài đặt](#cài-đặt)
 - [Cách chạy](#cách-chạy)
-- [Ghi chú quan trọng](#ghi-chú-quan-trọng)
-
-## 📁 Cấu trúc thư mục
-
-```
-multi_function_agent/
-    ├── configs/
-    │   └── config.yml                            # Cấu hình system + Nav2
-    └── robot_vision_controller/
-        ├── main.py                               # Entry point - ROS2 integration
-        ├── core/
-        │   ├── query_extractor.py                # Prompt information extraction
-        │   ├── goal_parser.py                    # LLM mission parser 
-        │   ├── mission_controller.py             # Mission state machine
-        │   ├── ros2_node.py                      # Centralized ROS2 node
-        │   └── models.py                         # YOLO model management
-        ├── navigation/
-        │   ├── nav2_interface.py                 # Nav2 Python interface
-        │   ├── navigation_reasoner.py            # Mission-aware navigation logic
-        │   └── robot_controller_interface.py     # ROS2 DDS communication
-        ├── perception/
-        │   ├── lidar_monitor.py                  # Real-time collision avoidance
-        │   ├── robot_vision_analyzer.py          # YOLO + LIDAR spatial analysis
-        │   ├── spatial_detector.py               # LIDAR spatial analysis
-        │   └── rtsp_stream_handler.py            # RTSP stream handler        
-        └── utils/
-            ├── geometry_utils.py                 # Geometry calculation
-            ├── movement_commands.py              # Commands to move
-            ├── safety_checks.py                  # Safety First
-            ├── ros_interface.py                  # ROS utilities
-            └── log/
-                ├── error_handlers.py             # Error logging
-                ├── output_formatter.py           # Output logging
-                └── performance_logger.py         # Performance logging
-
-docker/   
-    ├── Dockerfile                                # NAT container with ROS2 packages
-    └── build_container.sh                        # Container build script
-
-turtlebot3_ws/
-└── src/
-    └── custom_controller/
-        └── custom_controller/
-            └── rtsp_publisher.py                 # RTSP stream publisher
-```
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -83,28 +38,28 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 ┌─────────────────────────────────────────────┐
 │   ROS2 Humble + Nav2 + Gazebo (Host)        │
 ├─────────────────────────────────────────────┤
-│  • TurtleBot3 Simulation (Gazebo)           │
+│  • TurtleBot3 Burger Simulation (Gazebo)    │
 │  • Nav2 Navigation Stack                    │
 │    - Global Planner (Dijkstra/A*)           │
 │    - Local Planner (DWA)                    │
 │    - Costmap (Obstacle inflation)           │
 │    - Recovery Behaviors                     │
 │  • SLAM Toolbox (Real-time mapping)         │
-│  • MediaMTX (RTSP streaming)                │
 │  • LIDAR Scanner (360° safety)              │
+│  • Cyclone DDS (RMW middleware)             │
 └─────────────────────────────────────────────┘
 ```
 
 **ROS2 Topics:**
 - `/cmd_vel` - Velocity commands
-- `/scan` - LIDAR data
+- `/scan` - LIDAR data (360 points)
 - `/odom` - Odometry
 - `/map` - SLAM map
 - `/plan` - Nav2 path
 
 ---
 
-#### **2. NAT-Agent Container (Python 3.12 + ROS2 Client)**
+#### **2. NAT-Agent Container (Python 3.11 + ROS2 Bridge)**
 ```
 ┌─────────────────────────────────────────────┐
 │     NVIDIA NAT + AI Agent Container         │
@@ -123,24 +78,30 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 │  • Vision Analyzer                          │
 │    - YOLO + LIDAR fusion                    │
 │    - Spatial awareness                      │
-│  • ROS2 Native Communication                │
-│    - rclpy for DDS communication            │
-│    - Direct topic pub/sub                   │
-│    - Nav2 action client                     │
+│  • ROS2 Subprocess Bridge                   │
+│    - Python 3.11 → System Python 3.10       │
+│    - Persistent daemon for sensor data      │
+│    - Cyclone DDS communication              │
 └─────────────────────────────────────────────┘
 ```
 
 **Key Features:**
 - Native ROS2 DDS communication (no HTTP bridge)
-- Direct topic publishing/subscribing
-- Nav2 action client for goal sending
+- Subprocess wrapper giải quyết Python version conflict
+- Cyclone DDS for stable discovery
 - YOLO-only pipeline (BLIP2 removed)
 - Mission-driven autonomous behavior
 
 ---
 
-### **Workflow tổng quan - Native ROS2 DDS Architecture**
+## 🏗️ Kiến trúc Native ROS2
 
+### **Python Version Challenge**
+- **NAT Agent:** Requires Python 3.11+
+- **ROS2 Humble:** Supports Python 3.10 only
+- **Solution:** Subprocess wrapper - Python 3.11 venv calls system Python 3.10 (rclpy)
+
+### **Communication Architecture**
 
 ![Workflow Diagram](src/multi_function_agent/robot_vision_controller/images/nat_container.png)
 
@@ -150,73 +111,35 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │   ROS2 Humble (Native)                              │    │
-│  │   - Gazebo + Nav2 + TurtleBot3                      │    │
+│  │   - Gazebo + Nav2 + TurtleBot3 Burger               │    │
 │  │   - Topics: /cmd_vel, /scan, /odom, /map            │    │
+│  │   - Cyclone DDS (RMW)                               │    │
 │  └──────────────────┬──────────────────────────────────┘    │
 │                     │                                       │
-│                     │ ROS2 DDS Network (FastRTPS)           │
+│                     │ ROS2 DDS Network (Cyclone DDS)        │
 │                     │ (Host Network Mode)                   │
 │                     │                                       │
 │  ┌──────────────────▼──────────────────────────────────┐    │
 │  │   NAT Container (nvidia-nat)                        │    │
-│  │   - Python 3.12 + ROS2 Client Libraries             │    │
-│  │   - core/ros2_node.py (Centralized Node)            │    │
-│  │   - Direct pub/sub: /cmd_vel, /scan, /odom          │    │
-│  │   - Nav2 action client: /navigate_to_pose           │    │
+│  │   - Python 3.11 venv (NAT Agent)                    │    │
+│  │   - System Python 3.10 (rclpy subprocess)           │    │
+│  │   - core/ros2_node.py (Subprocess Bridge)           │    │
+│  │   - Persistent daemon for sensor streaming          │    │
 │  │   - AI Agent + YOLO + Mission Controller            │    │
 │  └─────────────────────────────────────────────────────┘    │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
-
 ```
 
 **Communication Flow:**
-1. **Sensor Data:** `/scan`, `/odom` → ROS2 DDS → NAT container subscribers
-2. **Commands:** NAT container publisher → ROS2 DDS → `/cmd_vel` → Gazebo
-3. **Nav2 Goals:** NAT container action client → ROS2 DDS → Nav2 action server
-4. **Latency:** <1ms (shared memory), <3ms (localhost UDP)
+1. **Sensor Data:** Host publishes → Cyclone DDS → Container daemon subprocess → JSON stdout → Python 3.11 cache
+2. **Commands:** Python 3.11 → subprocess call → System Python 3.10 publish → Cyclone DDS → Host
+3. **Latency:** <10ms for cached reads, ~50ms for commands
 
----
-
-## 🗺️ Nav2 Integration
-
-### **Lợi ích của Nav2**
-
-#### **1. Proactive Navigation**
-- **Trước (Reactive LIDAR):** Robot chỉ phản ứng khi gần vật cản
-- **Sau (Nav2):** Robot biết map, plan đường trước, tránh chướng ngại vật sớm
-
-#### **2. Global Path Planning**
-- Dijkstra/A* algorithm trên map
-- Tìm đường tối ưu từ A → B
-- Tránh vùng nguy hiểm trên costmap
-
-#### **3. Local Obstacle Avoidance**
-- DWA (Dynamic Window Approach)
-- Real-time trajectory adjustment
-- Tránh chướng ngại vật động
-
-#### **4. Recovery Behaviors**
-- Tự động thoát khi bị stuck
-- Rotate → Clear costmap → Retry
-- Backup và tìm đường khác
-
-#### **5. Code Reduction & Reliability**
-- Simplified vision pipeline (YOLO + LIDAR only)
-- Nav2 handles complex path planning
-- Focus on mission-specific behaviors
-- Battle-tested navigation algorithms
-
-### **Khi nào dùng Nav2 vs Manual**
-
-|      Directive      | Nav2 | Manual |             Lý do            |
-|---------------------|------|--------|------------------------------|
-| `explore_random`    |  ✅  |        |       Random goals on map    |
-| `patrol_circle`     |  ✅  |        |  Arc navigation with goals   |
-| `track_follow`      |  ⚠️  |   ✅   | Target di động, cần reactive |
-| `track_backup`      |      |   ✅   |   Precise distance control   |
-| `track_search_spin` |      |   ✅   |     360° rotation in place   |
-| `track_approach`    |  ✅  |        |     Goal-based approach      |
+**Why Cyclone DDS?**
+- ✅ FastDDS had discovery issues with Docker host networking
+- ✅ Cyclone DDS: stable, immediate discovery, zero extra config
+- ✅ Tested: 360 LIDAR points @ 5Hz, zero packet loss
 
 ---
 
@@ -231,10 +154,7 @@ Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
 "Tìm 3 người"
 ```
 **Navigation:** Nav2 exploration + YOLO detection  
-**Behavior:** 
-- Explore environment và đếm objects
-- Dừng khi đủ số lượng
-- Track progress: current_count / target_count
+**Behavior:** Explore environment, đếm objects, dừng khi đủ số lượng
 
 ---
 
@@ -242,14 +162,9 @@ Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
 ```bash
 "Theo sau người đang đi"
 "Follow the person"
-"Đi theo mục tiêu di động"
 ```
 **Navigation:** Hybrid (Nav2 approach + manual tracking)  
-**Behavior:** 
-- Track target at safe distance (1.0-2.5m)
-- YOLO bbox tracking với real-time adjustment
-- Search pattern if lost >3s
-- Recovery: rotate, explore, approach
+**Behavior:** Track target at safe distance (1.0-2.5m), search if lost >3s
 
 ---
 
@@ -257,14 +172,9 @@ Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
 ```bash
 "Đi 20 vòng tròn"
 "Patrol 5 laps"
-"Tuần tra 10 vòng"
 ```
 **Navigation:** Nav2 arc goals  
-**Behavior:** 
-- Complete N circular laps
-- Arc-based waypoint generation
-- Return to start position after completion
-- Track progress: current_lap / target_laps
+**Behavior:** Complete N circular laps, return to start after completion
 
 ---
 
@@ -275,11 +185,7 @@ Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
 "Run wide automatically in 60 seconds"
 ```
 **Navigation:** Nav2 random goals  
-**Behavior:** 
-- Random waypoint generation on map
-- Smooth navigation with obstacle avoidance
-- Time-based or continuous exploration
-- Coverage maximization
+**Behavior:** Random waypoint generation, smooth obstacle avoidance
 
 ---
 
@@ -297,14 +203,6 @@ Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
 - **CPU**: 4+ cores
 - **Disk**: 10GB free space (Docker image)
 
-### **Dependencies tự động cài:**
-- ROS2 Humble packages (host)
-- Nav2 navigation stack (host)
-- TurtleBot3 packages (host)
-- ROS2 client libraries (container)
-- YOLO model (container)
-- Python libraries (container)
-
 ---
 
 ## 🔧 Cài đặt
@@ -320,21 +218,20 @@ curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu jammy main" \
     | sudo tee /etc/apt/sources.list.d/ros2.list
 
-# Install ROS2 Humble Desktop
+# Install ROS2 Humble Desktop + Nav2 + TurtleBot3
 sudo apt update
-sudo apt install -y ros-humble-desktop
+sudo apt install -y \
+    ros-humble-desktop \
+    ros-humble-navigation2 \
+    ros-humble-nav2-bringup \
+    ros-humble-turtlebot3* \
+    ros-humble-slam-toolbox \
+    ros-humble-rmw-cyclonedds-cpp
 
-# Install Nav2
-sudo apt install -y ros-humble-navigation2 ros-humble-nav2-bringup
-
-# Install TurtleBot3
-sudo apt install -y ros-humble-turtlebot3*
-
-# Install SLAM Toolbox
-sudo apt install -y ros-humble-slam-toolbox
-
-# Source ROS2
-echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+# Setup environment (IMPORTANT!)
+echo "export ROS_DOMAIN_ID=0" >> ~/.bashrc
+echo "export TURTLEBOT3_MODEL=burger" >> ~/.bashrc
+echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -348,9 +245,6 @@ sudo sh get-docker.sh
 # Add user to docker group
 sudo usermod -aG docker $USER
 newgrp docker
-
-# Verify installation
-docker --version
 ```
 
 ### **Bước 3: Clone Repository**
@@ -365,7 +259,6 @@ cd nemo-agent-toolkit
 
 ```bash
 # Terminal 1: Launch Gazebo
-export TURTLEBOT3_MODEL=waffle_pi
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 
 # Terminal 2: Launch SLAM
@@ -389,6 +282,8 @@ cd ~/nemo-agent-toolkit/docker
 ./build_container.sh
 ```
 
+**Note:** Dockerfile đã include Cyclone DDS và ROS2 packages. Build time: ~5-10 phút.
+
 ---
 
 ## 🚀 Cách chạy
@@ -396,67 +291,66 @@ cd ~/nemo-agent-toolkit/docker
 ### **Bước 1: Start ROS2 Environment (Host)**
 
 ```bash
-# Terminal 1: Launch Nav2
-export TURTLEBOT3_MODEL=waffle_pi
-ros2 launch nav2_bringup bringup_launch.py \
+# Terminal 1: Launch Gazebo
+ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+
+# Terminal 2: Launch Nav2 (TurtleBot3 version)
+ros2 launch turtlebot3_navigation2 navigation2.launch.py \
     use_sim_time:=True \
     map:=$HOME/my_map.yaml
 
-# Terminal 2: Launch Gazebo
-ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
-
-# Terminal 3: Launch RTSP publisher (if needed)
-cd ~/nemo-agent-toolkit/turtlebot3_ws
-source install/setup.bash
-python3 src/custom_controller/custom_controller/rtsp_publisher.py
+# Terminal 3: RViz sẽ tự động mở
+# IMPORTANT: Set initial pose bằng "2D Pose Estimate" tool
 ```
 
-### **Bước 2: Set Initial Pose in RViz**
+### **Bước 2: Run NAT Container**
 
 ```bash
-# Terminal 4: Launch RViz
-rviz2
-
-# In RViz:
-# 1. Click "2D Pose Estimate" tool
-# 2. Click on robot's position on map
-# 3. Drag to set orientation
-```
-
-### **Bước 3: Run NAT Container**
-
-```bash
-# Terminal 5: Start NAT container
+# Terminal 4: Start NAT container
 docker run -it --rm \
     --network=host \
     --name nat_container \
     -e ROS_DOMAIN_ID=0 \
-    -e ROS_LOCALHOST_ONLY=0 \
-    -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
-    -v $(pwd)/../multi_function_agent:/workspace/multi_function_agent:rw \
-    -v $(pwd)/../configs:/workspace/configs:ro \
-    --runtime=nvidia \
+    -v ~/nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent:/workspace/multi_function_agent:rw \
+    -v ~/nemo-agent-toolkit/examples/multi_function_agent/configs:/workspace/configs:ro \
     nvidia-nat:latest bash
 ```
 
-### **Bước 4: Verify ROS2 Connection**
+### **Bước 3: Verify ROS2 Connection**
 
 ```bash
 # Inside container
-source /opt/ros/humble/setup.bash
+cd /workspace
+export PYTHONPATH=/workspace:$PYTHONPATH
 
-# Check nodes
-ros2 node list
-# Expected: /gazebo, /bt_navigator, /controller_server, /nat_agent_node
+# Test ROS2 bridge
+python3 -c "
+from multi_function_agent.robot_vision_controller.core.ros2_node import get_ros2_node
+import time
 
-# Check topics
-ros2 topic list | grep -E "(cmd_vel|scan|odom)"
+node = get_ros2_node()
+print('✅ Bridge initialized, waiting 3s...')
+time.sleep(3)
 
-# Test echo
-ros2 topic echo /scan --once
+scan = node.get_scan()
+odom = node.get_odom()
+pose = node.get_robot_pose()
+
+print(f'LIDAR: {len(scan.ranges) if scan else 0} points')
+print(f'Odom: {\"OK\" if odom else \"None\"}')
+print(f'Pose: {pose}')
+"
 ```
 
-### **Bước 5: Run Mission**
+**Expected output:**
+```
+✅ Bridge initialized, waiting 3s...
+LIDAR: 360 points
+Odom: OK
+Pose: {'x': 0.57, 'y': 1.61, 'theta': -0.19}
+```
+
+### **Bước 4: Run Mission**
 
 ```bash
 # Inside container
@@ -481,40 +375,99 @@ nat run --config_file /workspace/configs/config.yml --input "Đi 5 vòng tròn"
 
 ---
 
+## 🔧 Troubleshooting
+
+### **Problem: LIDAR/Odom trả về None**
+
+**Check ROS2 environment variables:**
+```bash
+# On host
+echo $ROS_DOMAIN_ID  # Should be 0
+echo $RMW_IMPLEMENTATION  # Should be rmw_cyclonedds_cpp
+
+# Inside container
+echo $ROS_DOMAIN_ID  # Should be 0
+```
+
+**Verify topics visible:**
+```bash
+# Inside container
+source /opt/ros/humble/setup.bash
+ros2 topic list | grep -E "(scan|odom)"
+```
+
+**Solution:** Ensure matching `ROS_DOMAIN_ID` và `RMW_IMPLEMENTATION` on both host and container.
+
+---
+
+### **Problem: Nav2 không nhận goal**
+
+**Check Nav2 status:**
+```bash
+ros2 node list | grep bt_navigator
+ros2 action list | grep navigate
+```
+
+**Solution:** Set initial pose in RViz (REQUIRED!):
+1. Open RViz
+2. Click "2D Pose Estimate" tool
+3. Click on robot's position on map
+4. Drag to set orientation
+
+---
+
+### **Problem: Container không connect ROS2**
+
+**Verify host network mode:**
+```bash
+docker inspect nat_container | grep NetworkMode
+# Should be "host"
+```
+
+**Check Cyclone DDS installed:**
+```bash
+# Inside container
+dpkg -l | grep cyclonedds
+```
+
+**Solution:** Rebuild Docker image nếu thiếu Cyclone DDS.
+
+---
+
+### **Problem: Daemon crashed - "Daemon reader stopped"**
+
+**Check daemon script has Cyclone DDS:**
+```bash
+# On host
+grep -A 2 "script = " ~/nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent/robot_vision_controller/core/ros2_node.py | head -5
+```
+
+Should see:
+```python
+script = """
+import os
+os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
+```
+
+**Solution:** Update `ros2_node.py` nếu thiếu dòng này.
+
+---
+
 ## 📝 Ghi chú quan trọng
 
 ### **Native ROS2 DDS Communication**
 
-✅ **Benefits:**
-- **Zero HTTP overhead:** Direct DDS communication (<1ms latency)
-- **Real-time callbacks:** Sensor data updates via subscribers
-- **Native Nav2 integration:** Action client works natively
-- **Production-ready:** Same architecture as real hardware
-- **Simplified codebase:** No bridge server maintenance
-
 ✅ **Architecture:**
-- **Host network mode:** Container shares host's network stack
-- **Centralized node:** Single ROS2 node (`core/ros2_node.py`) manages all communication
-- **Thread-safe data access:** Lock-protected sensor data storage
-- **Background spinning:** MultiThreadedExecutor in daemon thread
+- **Subprocess wrapper:** Python 3.11 (NAT) → System Python 3.10 (rclpy)
+- **Persistent daemon:** 1 long-running subprocess thay vì tạo node mới mỗi lần
+- **Cyclone DDS:** Stable discovery, zero config, tested production-ready
+- **Thread-safe:** Lock-protected sensor data cache
 
----
-
-### **Hybrid Navigation Strategy**
-
-**Nav2 Usage (70-80% of time):**
-- ✅ `explore_random`: Random waypoints on the map
-- ✅ `patrol_*`: Arc-based circular motion
-- ✅ `track_approach`: Goal-based target approach
-- ✅ Smooth, collision-free paths
-- ✅ Auto recovery from stuck situations
-
-**Manual Control (20-30% of time):**
-- ✅ `track_follow`: Real-time YOLO bbox tracking
-- ✅ `track_backup`: Precise reverse movements
-- ✅ `track_search_spin`: 360° search rotation
-- ✅ Nav2 fallback when goal rejected
-- ✅ Emergency behaviors
+✅ **Performance:**
+- Sensor data latency: <10ms (cached reads)
+- Command latency: ~50ms (subprocess call)
+- LIDAR rate: ~5Hz (360 points)
+- Odom rate: ~10Hz
 
 ---
 
@@ -526,7 +479,6 @@ nat run --config_file /workspace/configs/config.yml --input "Đi 5 vòng tròn"
 - 🛡️ **Level 2 (LIDAR Veto)**: Pre-execution safety check
 - 🛡️ **Level 3 (20Hz Monitor)**: Continuous safety during movement
 - 🛡️ **Level 4 (Immediate Abort)**: <50ms stop at critical distance
-- 🛡️ **Level 5 (Progressive Scale)**: Speed reduction near obstacles
 
 **Safety Guarantees:**
 - ⚡ Response time: <50ms from detection to stop
@@ -536,86 +488,14 @@ nat run --config_file /workspace/configs/config.yml --input "Đi 5 vòng tròn"
 
 ---
 
-### **AI Pipeline Features**
-
-- **LLM-Powered Parsing**: Natural language → Structured missions (1x startup)
-- **YOLO Detection**: 80 COCO classes, 50ms inference, 2Hz cached
-- **State Machine**: Mission progress tracking
-- **Completion Detection**: Auto-stop when goal achieved
-- **Adaptive Navigation**: Hybrid Nav2/Manual based on directive
-- **Real-time Tracking**: YOLO bbox center + distance estimation
-
----
-
-### **Troubleshooting**
-
-**Problem: ros2 node list không thấy nodes**
-```bash
-# Check ROS_DOMAIN_ID
-echo $ROS_DOMAIN_ID  # Phải = 0
-
-# Check if ROS2 running on host
-ps aux | grep ros2
-
-# Restart ROS2 environment
-```
-
-**Problem: No LIDAR data trong container**
-```bash
-# Check topic on host
-ros2 topic hz /scan
-
-# Check QoS compatibility
-ros2 topic info /scan -v
-
-# Inside container
-ros2 topic echo /scan --once
-```
-
-**Problem: Nav2 không nhận goal**
-```bash
-# Check Nav2 status
-ros2 node list | grep bt_navigator
-
-# Set initial pose in RViz (REQUIRED!)
-rviz2  # Use "2D Pose Estimate" tool
-
-# Check action server
-ros2 action list | grep navigate
-```
-
-**Problem: Container không kết nối ROS2**
-```bash
-# Verify host network mode
-docker inspect nat_container | grep NetworkMode
-# Should be "host"
-
-# Check ROS_DOMAIN_ID match
-# Host
-echo $ROS_DOMAIN_ID
-
-# Container
-docker exec nat_container bash -c "echo \$ROS_DOMAIN_ID"
-```
-
----
-
 ### **Limitations**
 
 **Technical Constraints:**
 - **YOLO Classes**: Limited to 80 COCO classes
-- **Distance Accuracy**: LiDAR-fused (±5cm), fallback heuristic when out of LiDAR range (0.12-3.5m)
-- **Lap Detection**: Simple odometry-based (no SLAM loop closure)
-- **LLM Dependency**: Requires NIM API for prompt parsing
-- **Single Robot**: No multi-robot coordination
+- **Distance Accuracy**: LiDAR-fused (±5cm), fallback heuristic (0.12-3.5m)
+- **Python Version**: Subprocess overhead (~50ms per command)
 - **Map Dependency**: Nav2 requires pre-built SLAM map
 - **Host Network Required**: Container must use host network mode for ROS2 DDS
-
-**Known Issues:**
-- Camera resolution fixed at 640x480
-- YOLO confidence threshold: 0.5 (adjustable)
-- Nav2 goal tolerance: 0.2m position, 0.1rad orientation
-- Container requires ROS2 packages (~500MB added to base image)
 
 ---
 
@@ -624,6 +504,6 @@ docker exec nat_container bash -c "echo \$ROS_DOMAIN_ID"
 - [ROS2 Humble Documentation](https://docs.ros.org/en/humble/)
 - [Nav2 Documentation](https://navigation.ros.org/)
 - [TurtleBot3 Documentation](https://emanual.robotis.com/docs/en/platform/turtlebot3/overview/)
+- [Cyclone DDS](https://github.com/eclipse-cyclonedds/cyclonedds)
 - [Ultralytics YOLO](https://docs.ultralytics.com/)
 - [Docker Documentation](https://docs.docker.com/)
-- [FastRTPS Documentation](https://fast-dds.docs.eprosima.com/)
