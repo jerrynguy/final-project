@@ -149,7 +149,7 @@ class RobotControllerInterface(Node):
                 logger.error(f"Failed to initialize Nav2: {e}")
                 self.use_nav2 = False
         
-        self.robot_status = RobotStatus()
+        self._robot_status = RobotStatus()
         self.is_connected = False
         self._last_command_time = 0
         
@@ -166,13 +166,12 @@ class RobotControllerInterface(Node):
         if not hasattr(self, '_robot_status'):
             self._robot_status = RobotStatus()
         
-        # Update from ROS2 node
+        # Update position ONLY (preserve is_ready from connect())
         pose = self.ros_node.get_robot_pose()
         if pose:
             self._robot_status.position_x = pose['x']
             self._robot_status.position_y = pose['y']
             self._robot_status.theta = pose['theta']
-            self._robot_status.is_ready = True
         
         return self._robot_status
 

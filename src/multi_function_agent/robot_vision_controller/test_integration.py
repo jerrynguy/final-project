@@ -359,24 +359,24 @@ class IntegrationTester:
     # =========================================================================
     # Cleanup
     # =========================================================================
-    def cleanup(self):
+    async def cleanup(self):
         """Cleanup resources."""
         logger.info("Cleaning up...")
         
         try:
             if self.robot_interface:
-                asyncio.run(self.robot_interface.execute_command({
+                await self.robot_interface.execute_command({
                     'action': 'stop',
                     'parameters': {'linear_velocity': 0.0, 'angular_velocity': 0.0, 'duration': 0.1}
-                }))
-        except:
-            pass
+                })
+        except Exception as e:
+            logger.debug(f"Cleanup command failed: {e}")
         
         try:
             from multi_function_agent.robot_vision_controller.core.ros2_node import shutdown_ros2
             shutdown_ros2()
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Shutdown failed: {e}")
 
 
 # =============================================================================
@@ -411,7 +411,7 @@ async def run_tests():
         return all_passed
         
     finally:
-        tester.cleanup()
+        await tester.cleanup()
 
 
 if __name__ == "__main__":

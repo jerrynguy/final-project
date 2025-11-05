@@ -344,21 +344,29 @@ ros2 launch turtlebot3_navigation2 navigation2.launch.py \
     use_sim_time:=True \
     map:=$HOME/my_map.yaml
 
-# Terminal 3: RViz sẽ tự động mở
-# IMPORTANT: Set initial pose bằng "2D Pose Estimate" tool
+# Terminal 3: Start MediaMTX
+run_in_terminal "cd ~ && ./mediamtx"
+
+# Terminal 4: Start RTSP publisher
+run_in_terminal "cd ~/turtlebot3_ws/src/custom_controller/custom_controller && python3 rtsp_publisher.py"
+
+# Terminal 5: Run ffplay
+run_in_terminal "cd ~ && ffplay rtsp://127.0.0.1:8554/robotcam"
 ```
 
 ### **Bước 2: Run NAT Container**
 
 ```bash
-# Terminal 4: Start NAT container
+# Terminal 6: Start NAT container
+cd ~/nemo-agent-toolkit/docker
+
 docker run -it --rm \
     --network=host \
     --name nat_container \
     -e ROS_DOMAIN_ID=0 \
     -v ~/nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent:/workspace/multi_function_agent:rw \
     -v ~/nemo-agent-toolkit/examples/multi_function_agent/configs:/workspace/configs:ro \
-    nvidia-nat:latest bash
+    nvidia-nat:v1.2.1 bash
 ```
 
 ### **Bước 3: Verify ROS2 Connection**
