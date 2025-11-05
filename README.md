@@ -17,6 +17,7 @@ Hệ thống điều khiển robot TurtleBot3 tự động với AI Agent thông
 ---
 
 ## 📋 Mục lục
+- [Cấu trúc thư mục](#cấu-trúc-thư-mục)
 - [Tổng quan hệ thống](#tổng-quan-hệ-thống)
 - [Kiến trúc Native ROS2](#kiến-trúc-native-ros2)
 - [Mission Types](#mission-types)
@@ -24,6 +25,50 @@ Hệ thống điều khiển robot TurtleBot3 tự động với AI Agent thông
 - [Cài đặt](#cài-đặt)
 - [Cách chạy](#cách-chạy)
 - [Troubleshooting](#troubleshooting)
+
+## 📁 Cấu trúc thư mục
+
+```
+multi_function_agent/
+    ├── configs/
+    │   └── config.yml                            # Cấu hình system + Nav2
+    └── robot_vision_controller/
+        ├── main.py                               # Entry point - ROS2 integration
+        ├── core/
+        │   ├── query_extractor.py                # Prompt information extraction
+        │   ├── goal_parser.py                    # LLM mission parser 
+        │   ├── mission_controller.py             # Mission state machine
+        │   ├── ros2_node.py                      # Centralized ROS2 node
+        │   └── models.py                         # YOLO model management
+        ├── navigation/
+        │   ├── nav2_interface.py                 # Nav2 Python interface
+        │   ├── navigation_reasoner.py            # Mission-aware navigation logic
+        │   └── robot_controller_interface.py     # ROS2 DDS communication
+        ├── perception/
+        │   ├── lidar_monitor.py                  # Real-time collision avoidance
+        │   ├── robot_vision_analyzer.py          # YOLO + LIDAR spatial analysis
+        │   ├── spatial_detector.py               # LIDAR spatial analysis
+        │   └── rtsp_stream_handler.py            # RTSP stream handler        
+        └── utils/
+            ├── geometry_utils.py                 # Geometry calculation
+            ├── movement_commands.py              # Commands to move
+            ├── safety_checks.py                  # Safety First
+            ├── ros_interface.py                  # ROS utilities
+            └── log/
+                ├── error_handlers.py             # Error logging
+                ├── output_formatter.py           # Output logging
+                └── performance_logger.py         # Performance logging
+
+docker/   
+    ├── Dockerfile                                # NAT container with ROS2 packages
+    └── build_container.sh                        # Container build script
+
+turtlebot3_ws/
+└── src/
+    └── custom_controller/
+        └── custom_controller/
+            └── rtsp_publisher.py                 # RTSP stream publisher
+```
 
 ---
 
