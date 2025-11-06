@@ -90,6 +90,8 @@ class IntegrationTester:
     # =========================================================================
     # LAYER 2: Nav2 Connection Test
     # =========================================================================
+    # Line 295-335: REPLACE toàn bộ test_nav2_connection()
+
     async def test_nav2_connection(self) -> bool:
         """Test Nav2 interface availability."""
         logger.info("\n" + "="*60)
@@ -101,12 +103,7 @@ class IntegrationTester:
             
             self.robot_interface = RobotControllerInterface()
             
-            # Check if Nav2 enabled
-            if not self.robot_interface.use_nav2:
-                logger.warning("⚠️  Nav2 disabled in config")
-                self.results['nav2_enabled'] = False
-                return True  # Not a failure
-            
+            # ✅ FIX: THÊM AWAIT CONNECT()
             logger.info("Connecting to robot controller...")
             connected = await self.robot_interface.connect()
             
@@ -116,6 +113,13 @@ class IntegrationTester:
             else:
                 logger.info("✅ Robot controller connected")
                 self.results['robot_connected'] = True
+            
+            # Check if Nav2 enabled
+            if not self.robot_interface.use_nav2:
+                logger.warning("⚠️  Nav2 disabled in config")
+                self.results['nav2_enabled'] = False
+                logger.info("\n✅ LAYER 2 PASSED: Nav2 interface checked\n")
+                return True  # Not a failure
             
             # Check Nav2 ready
             logger.info("Waiting for Nav2 (10s timeout)...")

@@ -7,15 +7,15 @@ import subprocess
 import json
 import logging
 import threading
+import time
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-
 class ROS2Bridge:
     """
     Bridge between Python 3.11+ (NAT) and Python 3.10 (ROS2).
-    Uses persistent subprocess daemon for real-time sensor data.
+    Uses persistent subprocess daemon for real-time sensor data AND commands.
     """
     
     def __init__(self):
@@ -27,6 +27,9 @@ class ROS2Bridge:
         self._running = False
         self._lock = threading.Lock()
         
+        # Command queue for publisher daemon
+        self._cmd_queue_file = '/tmp/ros2_cmd_queue.txt'
+        
         # Start persistent daemon
         self._start_monitor()
         
@@ -37,37 +40,12 @@ class ROS2Bridge:
         return "ros2_bridge_daemon"
     
     def publish_velocity(self, linear: float, angular: float):
-        """Publish velocity command via subprocess."""
-        script = """
-import os
-os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
-
-import rclpy
-from geometry_msgs.msg import Twist
-
-rclpy.init()
-node = rclpy.create_node('cmd_vel_pub')
-pub = node.create_publisher(Twist, '/cmd_vel', 10)
-
-import time
-time.sleep(0.02)
-
-msg = Twist()
-msg.linear.x = {linear}
-msg.angular.z = {angular}
-pub.publish(msg)
-
-node.destroy_node()
-rclpy.shutdown()
-"""
+        """Publish velocity command via file queue (non-blocking)."""
         try:
-            subprocess.run(
-                [self.system_python, '-c', script],
-                capture_output=True,
-                timeout=0.5
-            )
+            with open(self._cmd_queue_file, 'w') as f:
+                f.write(f"{linear},{angular}\n")
         except Exception as e:
-            logger.debug(f"Publish error: {e}")
+            logger.debug(f"Queue write error: {e}")
     
     def publish_stop(self):
         """Publish stop command."""
@@ -101,6 +79,12 @@ rclpy.shutdown()
         """Start persistent daemon subprocess."""
         self._running = True
         
+        # Create empty queue file
+        try:
+            open(self._cmd_queue_file, 'w').close()
+        except:
+            pass
+        
         script = """
 import os
 os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
@@ -108,9 +92,11 @@ os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
 import rclpy
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import json
 import math
+import time
 
 # RELIABLE QoS to match Gazebo publisher
 qos = QoSProfile(
@@ -124,10 +110,19 @@ class SensorDaemon:
         rclpy.init()
         self.node = rclpy.create_node('sensor_daemon')
         
+        # Subscribers
         self.lidar_sub = self.node.create_subscription(
             LaserScan, '/scan', self.lidar_cb, qos)
         self.odom_sub = self.node.create_subscription(
             Odometry, '/odom', self.odom_cb, qos)
+        
+        # Publisher
+        self.cmd_vel_pub = self.node.create_publisher(Twist, '/cmd_vel', 10)
+        
+        # Command queue file
+        self.cmd_queue_file = '/tmp/ros2_cmd_queue.txt'
+        self.last_cmd = (0.0, 0.0)
+        self.last_read_time = time.time()
     
     def lidar_cb(self, msg):
         data = {
@@ -166,8 +161,39 @@ class SensorDaemon:
         }
         print(json.dumps(data), flush=True)
     
+    def read_cmd_queue(self):
+        try:
+            # Only read if file modified recently
+            current_time = time.time()
+            if current_time - self.last_read_time < 0.01:
+                return self.last_cmd
+            
+            with open(self.cmd_queue_file, 'r') as f:
+                line = f.read().strip()
+                if line:
+                    parts = line.split(',')
+                    if len(parts) == 2:
+                        linear = float(parts[0])
+                        angular = float(parts[1])
+                        self.last_cmd = (linear, angular)
+                        self.last_read_time = current_time
+        except:
+            pass
+        
+        return self.last_cmd
+    
+    def publish_cmd_vel(self):
+        linear, angular = self.read_cmd_queue()
+        
+        msg = Twist()
+        msg.linear.x = linear
+        msg.angular.z = angular
+        self.cmd_vel_pub.publish(msg)
+    
     def spin(self):
         try:
+            # Spin with timer for command publishing
+            timer = self.node.create_timer(0.05, self.publish_cmd_vel)  # 20Hz
             rclpy.spin(self.node)
         except:
             pass
@@ -239,6 +265,10 @@ daemon.spin()
         """Shutdown bridge and daemon."""
         self._running = False
         
+        # Send stop command
+        self.publish_stop()
+        time.sleep(0.1)
+        
         if self._daemon_process:
             self._daemon_process.terminate()
             try:
@@ -248,6 +278,13 @@ daemon.spin()
         
         if self._monitor_thread:
             self._monitor_thread.join(timeout=2)
+        
+        # Cleanup queue file
+        try:
+            import os
+            os.remove(self._cmd_queue_file)
+        except:
+            pass
         
         logger.info("✅ ROS2Bridge shutdown")
 

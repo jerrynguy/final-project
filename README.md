@@ -34,12 +34,13 @@ multi_function_agent/
     │   └── config.yml                            # Cấu hình system + Nav2
     └── robot_vision_controller/
         ├── main.py                               # Entry point - ROS2 integration
+        ├── test_integration.py                   # Test the system
         ├── core/
         │   ├── query_extractor.py                # Prompt information extraction
         │   ├── goal_parser.py                    # LLM mission parser 
         │   ├── mission_controller.py             # Mission state machine
         │   ├── ros2_node.py                      # Centralized ROS2 node
-        │   └── models.py                         # YOLO model management
+        │   └── models.py                         # AI model management
         ├── navigation/
         │   ├── nav2_interface.py                 # Nav2 Python interface
         │   ├── navigation_reasoner.py            # Mission-aware navigation logic
@@ -364,9 +365,13 @@ docker run -it --rm \
     --network=host \
     --name nat_container \
     -e ROS_DOMAIN_ID=0 \
+    -e NVIDIA_API_KEY="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" \
+    -e NGC_API_KEY="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" \
     -v ~/nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent:/workspace/multi_function_agent:rw \
     -v ~/nemo-agent-toolkit/examples/multi_function_agent/configs:/workspace/configs:ro \
     nvidia-nat:v1.2.1 bash
+
+python3 multi_function_agent/robot_vision_controller/test_integration.py
 ```
 
 ### **Bước 3: Verify ROS2 Connection**

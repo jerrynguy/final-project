@@ -62,14 +62,10 @@ except ImportError:
     ROS_AVAILABLE = False
 
 try:
-    from multi_function_agent.robot_vision_controller.utils.movement_commands import convert_navigation_to_twist
     from multi_function_agent.robot_vision_controller.utils.safety_checks import validate_robot_command_safety
     from multi_function_agent.robot_vision_controller.utils.ros_interface import ROSManager
     
-except ImportError:
-    def convert_navigation_to_twist(action, parameters, config):
-        return None
-    
+except ImportError:    
     def validate_robot_command_safety(twist, config):
         return True
     
@@ -368,8 +364,28 @@ class RobotControllerInterface(Node):
             action = navigation_decision.get('action', 'stop')
             parameters = navigation_decision.get('parameters', {})
             
-            # Convert to ROS Twist message
-            twist_msg = convert_navigation_to_twist(action, parameters, self.config)
+            # Create Twist directly
+            class TwistMsg:
+                def __init__(self):
+                    class Vec3:
+                        def __init__(self):
+                            self.x = 0.0
+                            self.y = 0.0
+                            self.z = 0.0
+                    
+                    self.linear = Vec3()
+                    self.angular = Vec3()
+            
+            twist_msg = TwistMsg()
+            twist_msg.linear.x = parameters.get('linear_velocity', 0.0)
+            twist_msg.angular.z = parameters.get('angular_velocity', 0.0)
+            
+            # Clamp to safety limits
+            max_linear = self.config.get('max_linear_velocity', 0.22)
+            max_angular = self.config.get('max_angular_velocity', 2.84)
+            
+            twist_msg.linear.x = max(-max_linear, min(max_linear, twist_msg.linear.x))
+            twist_msg.angular.z = max(-max_angular, min(max_angular, twist_msg.angular.z))
             
             # Validate safety
             if not validate_robot_command_safety(twist_msg, self.config):
