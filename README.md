@@ -191,20 +191,9 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 
 ## 🎮 Mission Types
 
-Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
+Robot hỗ trợ 3 loại nhiệm vụ thông qua natural language:
 
-### **1. Count Objects** (Đếm vật thể)
-```bash
-"Đếm 10 chai nước"
-"Count 5 cups"
-"Tìm 3 người"
-```
-**Navigation:** Nav2 exploration + YOLO detection  
-**Behavior:** Explore environment, đếm objects, dừng khi đủ số lượng
-
----
-
-### **2. Follow Target** (Bám theo mục tiêu)
+### **1. Follow Target** (Bám theo mục tiêu)
 ```bash
 "Theo sau người đang đi"
 "Follow the person"
@@ -214,7 +203,7 @@ Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
 
 ---
 
-### **3. Patrol Laps** (Tuần tra vòng)
+### **2. Patrol Laps** (Tuần tra vòng)
 ```bash
 "Đi 20 vòng tròn"
 "Patrol 5 laps"
@@ -224,7 +213,7 @@ Robot hỗ trợ 4 loại nhiệm vụ thông qua natural language:
 
 ---
 
-### **4. Explore Area** (Khám phá)
+### **3. Explore Area** (Khám phá)
 ```bash
 "Khám phá tự do"
 "Explore the environment"
@@ -418,11 +407,8 @@ nat run --config_file /workspace/configs/config.yml --input "YOUR_MISSION"
 **Example Missions:**
 
 ```bash
-# Explore với Nav2
+# Explore với Nav2 
 nat run --config_file /workspace/configs/config.yml --input "Run wide automatically in 60 seconds"
-
-# Count objects (YOLO)
-nat run --config_file /workspace/configs/config.yml --input "Đếm 10 chai nước"
 
 # Follow target (Hybrid Nav2 + YOLO)
 nat run --config_file /workspace/configs/config.yml --input "Theo sau người đang đi"

@@ -9,6 +9,8 @@ import threading
 from enum import Enum
 from typing import Optional, Tuple, Callable
 
+logger = logging.getLogger(__name__)
+
 try:
     import rclpy
     from rclpy.node import Node
@@ -22,17 +24,37 @@ try:
     NAV2_AVAILABLE = True
 except ImportError:
     NAV2_AVAILABLE = False
+    logger.warning("Nav2 packages not available - using fallback mode")
     
-    # Mock all ROS types for type hints
+    # Mock all classes for graceful degradation
     class Node:
-        pass
+        def __init__(self, name):
+            self.name = name
+        def get_clock(self):
+            class Clock:
+                def now(self):
+                    class Time:
+                        def to_msg(self): return None
+                    return Time()
+            return Clock()
+        def create_subscription(self, *args, **kwargs):
+            return None
     
     class ActionClient:
-        pass
+        def __init__(self, *args, **kwargs):
+            pass
+        def wait_for_server(self, timeout_sec=1.0):
+            return False
     
     NavigateToPose = None
     Path = None
-    PoseStamped = None
+    PoseStamped = type('PoseStamped', (), {
+        'header': type('Header', (), {'frame_id': '', 'stamp': None})(),
+        'pose': type('Pose', (), {
+            'position': type('Point', (), {'x': 0.0, 'y': 0.0, 'z': 0.0})(),
+            'orientation': type('Quaternion', (), {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0})()
+        })()
+    })
     Pose = None
     Point = None
     Quaternion = None
@@ -40,11 +62,6 @@ except ImportError:
     
     def quaternion_from_euler(*args, **kwargs):
         return [0, 0, 0, 1]
-
-logger = logging.getLogger(__name__)
-
-logger = logging.getLogger(__name__)
-
 
 # =============================================================================
 # Navigation State
