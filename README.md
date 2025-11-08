@@ -356,11 +356,14 @@ docker run -it --rm \
     -e ROS_DOMAIN_ID=0 \
     -e NVIDIA_API_KEY="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" \
     -e NGC_API_KEY="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" \
-    -v ~/nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent:/workspace/multi_function_agent:rw \
-    -v ~/nemo-agent-toolkit/examples/multi_function_agent/configs:/workspace/configs:ro \
-    nvidia-nat:v1.2.1 bash
+    -v ~/nemo-agent-toolkit/examples/multi_function_agent:/workspace/multi_function_agent:rw \
+    nvidia-nat:v1.2.1 \
+    "nat run --config_file /workspace/multi_function_agent/src/multi_function_agent/configs/config.yml --input 'Navigate to position (2.0, 3.0)'"
 
 python3 multi_function_agent/robot_vision_controller/test_integration.py
+
+nat run --config_file /workspace/multi_function_agent/src/multi_function_agent/configs/config.yml --input "Navigate to position (2.0, 3.0)"
+
 ```
 
 ### **Bước 3: Verify ROS2 Connection**

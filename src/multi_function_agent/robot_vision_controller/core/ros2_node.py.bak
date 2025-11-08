@@ -131,22 +131,10 @@ os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
 
 import rclpy
 from rclpy.action import ActionClient
-try:
-    from sensor_msgs.msg import LaserScan
-except ImportError:
-    from multi_function_agent.robot_vision_controller.utils.ros2_stubs import LaserScan
-try:
-    from nav_msgs.msg import Odometry, OccupancyGrid
-except ImportError:
-    from multi_function_agent.robot_vision_controller.utils.ros2_stubs import Odometry, OccupancyGrid
-try:
-    from geometry_msgs.msg import Twist, PoseStamped, Quaternion
-except ImportError:
-    from multi_function_agent.robot_vision_controller.utils.ros2_stubs import Twist, PoseStamped, Quaternion
-try:
-    from nav2_msgs.action import NavigateToPose
-except ImportError:
-    from multi_function_agent.robot_vision_controller.utils.ros2_stubs import NavigateToPose
+from sensor_msgs.msg import LaserScan
+from nav_msgs.msg import Odometry, OccupancyGrid
+from geometry_msgs.msg import Twist, PoseStamped, Quaternion
+from nav2_msgs.action import NavigateToPose
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 import json
 import math

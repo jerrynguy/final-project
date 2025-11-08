@@ -19,7 +19,7 @@ llms:
 # Robot Vision Function Configuration
 functions: 
   robot_vision_controller:
-    _type: robot_vision_controller
+    _type: multi_function_agent/robot_vision_controller
     stream_url: "rtsp://127.0.0.1:8554/robotcam"
     control_mode: "autonomous"
     navigation_goal: "explore"

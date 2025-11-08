@@ -323,7 +323,7 @@ class IntegrationTester:
                 
                 # Cancel goal
                 logger.info("Canceling Nav2 goal...")
-                await self.robot_interface.cancel_nav2_goal()
+                self.robot_interface.cancel_nav2_navigation()
                 
                 self.results['nav2_goal'] = True
                 logger.info("\n✅ LAYER 5 PASSED: Nav2 goal functional\n")
