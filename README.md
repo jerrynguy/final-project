@@ -32,6 +32,7 @@ Hệ thống điều khiển robot TurtleBot3 tự động với AI Agent thông
 multi_function_agent/
     ├── configs/
     │   └── config.yml                            # Cấu hình system + Nav2
+    ├── register.py                               # Create agent's function
     └── robot_vision_controller/
         ├── main.py                               # Entry point - ROS2 integration
         ├── test_integration.py                   # Test the system
@@ -326,85 +327,67 @@ cd ~/nemo-agent-toolkit/docker
 ### **Bước 1: Start ROS2 Environment (Host)**
 
 ```bash
-# Terminal 1: Launch Gazebo
-ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+# Function to run command in new terminal
+run_in_terminal() {
+    gnome-terminal -- bash -c "$1; exec bash"
+}
 
-# Terminal 2: Launch Nav2 (TurtleBot3 version)
-ros2 launch turtlebot3_navigation2 navigation2.launch.py \
-    use_sim_time:=True \
-    map:=$HOME/my_map.yaml
+echo "Starting robot stack..."
 
-# Terminal 3: Start MediaMTX
+# Start Gazebo
+run_in_terminal "cd ~ && ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py"
+
+sleep 5
+
+run_in_terminal "cd ~ && ros2 launch turtlebot3_navigation2 navigation2.launch.py use_sim_time:=True map:=$HOME/my_map.yaml"
+
+sleep 3
+
+# Start MediaMTX
 run_in_terminal "cd ~ && ./mediamtx"
 
-# Terminal 4: Start RTSP publisher
+sleep 2  
+
+# Start RTSP publisher
 run_in_terminal "cd ~/turtlebot3_ws/src/custom_controller/custom_controller && python3 rtsp_publisher.py"
 
-# Terminal 5: Run ffplay
+sleep 2
+
+# Run ffplay
 run_in_terminal "cd ~ && ffplay rtsp://127.0.0.1:8554/robotcam"
+
+echo "All services started!"
+echo "You can now run your AI agent in this terminal:"
+echo "cd ~/nemo-agent-toolkit && source .venv/bin/activate"
 ```
 
 ### **Bước 2: Run NAT Container**
 
 ```bash
-# Terminal 6: Start NAT container
 cd ~/nemo-agent-toolkit/docker
 
+# Create named volumes (chỉ chạy 1 lần)
+docker volume create nat_models 2>/dev/null || true
+docker volume create nat_ros2 2>/dev/null || true
+
+# Run container với hybrid mounts
 docker run -it --rm \
     --network=host \
     --name nat_container \
     -e ROS_DOMAIN_ID=0 \
-    -e NVIDIA_API_KEY="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" \
-    -e NGC_API_KEY="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" \
-    -v ~/nemo-agent-toolkit/examples/multi_function_agent:/workspace/multi_function_agent:rw \
+    -e RTSP_URL="${RTSP_URL:-rtsp://host.docker.internal:8554/robotcam}" \
+    -e NVIDIA_API_KEY="${NVIDIA_API_KEY:-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}" \
+    -e NGC_API_KEY="${NGC_API_KEY:-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}" \
+    -v ~/nemo-agent-toolkit/examples/multi_function_agent:/workspace/mounted_code:rw \
+    -v nat_models:/workspace/persistent_data/models:rw \
+    -v nat_ros2:/workspace/persistent_data/ros2_packages:ro \
     nvidia-nat:v1.2.1 \
-    "nat run --config_file /workspace/multi_function_agent/src/multi_function_agent/configs/config.yml --input 'Navigate to position (2.0, 3.0)'"
+    "${@:-bash}"
 
-python3 multi_function_agent/robot_vision_controller/test_integration.py
+# Usage examples:
+# ./run_hybrid_container.sh  # Interactive bash
+# ./run_hybrid_container.sh "nat run --config_file /workspace/mounted_code/configs/config.yml --input 'Navigate to (2.0, 3.0)'"
 
-nat run --config_file /workspace/multi_function_agent/src/multi_function_agent/configs/config.yml --input "Navigate to position (2.0, 3.0)"
-
-```
-
-### **Bước 3: Verify ROS2 Connection**
-
-```bash
-# Inside container
-cd /workspace
-export PYTHONPATH=/workspace:$PYTHONPATH
-
-# Test ROS2 bridge
-python3 -c "
-from multi_function_agent.robot_vision_controller.core.ros2_node import get_ros2_node
-import time
-
-node = get_ros2_node()
-print('✅ Bridge initialized, waiting 3s...')
-time.sleep(3)
-
-scan = node.get_scan()
-odom = node.get_odom()
-pose = node.get_robot_pose()
-
-print(f'LIDAR: {len(scan.ranges) if scan else 0} points')
-print(f'Odom: {\"OK\" if odom else \"None\"}')
-print(f'Pose: {pose}')
-"
-```
-
-**Expected output:**
-```
-✅ Bridge initialized, waiting 3s...
-LIDAR: 360 points
-Odom: OK
-Pose: {'x': 0.57, 'y': 1.61, 'theta': -0.19}
-```
-
-### **Bước 4: Run Mission**
-
-```bash
-# Inside container
-nat run --config_file /workspace/configs/config.yml --input "YOUR_MISSION"
 ```
 
 **Example Missions:**

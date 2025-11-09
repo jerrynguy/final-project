@@ -20,7 +20,7 @@ llms:
 functions: 
   robot_vision_controller:
     _type: multi_function_agent/robot_vision_controller
-    stream_url: "rtsp://127.0.0.1:8554/robotcam"
+    stream_url: "${RTSP_URL:-rtsp://172.17.0.1:8554/robotcam}"
     control_mode: "autonomous"
     navigation_goal: "explore"
     safety_level: "medium"
@@ -41,12 +41,6 @@ functions:
     connection_timeout: 3.0
     max_linear_velocity: 0.6
     max_angular_velocity: 2.5
-
-    # SLAM Map configuration
-    use_slam_map: true
-    map_topic: "/map"
-    exploration_radius: 3.0
-    min_frontier_size: 5
     
     # Nav2 Configuration
     use_nav2: true                    # Enable Nav2 navigation

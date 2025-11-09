@@ -100,7 +100,6 @@ else:
 # Main Controller Function
 # =============================================================================
 
-@register_function(config_type=RobotVisionConfig)
 async def robot_vision_controller(
     config: RobotVisionConfig, 
     builder: Builder

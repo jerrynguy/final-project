@@ -53,10 +53,24 @@ class RTSPStreamHandler:
     Manages RTSP video stream with robust error handling.
     """
     
-    def __init__(self, config_path: str = "/home/dung/nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent/configs/config.yml"):
+    def __init__(self, config_path: str = None):
         """
         Initialize RTSP stream handler.
         """
+        # Dynamic config path resolution
+        if config_path is None:
+            from pathlib import Path
+            config_paths = [
+                Path("/workspace/mounted_code/src/multi_function_agent/configs/config.yml"),  # Container
+                Path(__file__).parent.parent.parent / "configs/config.yml",  # Relative
+                Path.home() / "nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent/configs/config.yml",  # Host
+            ]
+            
+            for path in config_paths:
+                if path.exists():
+                    config_path = str(path)
+                    break
+        
         self.config = self._load_config(config_path)
         
         # Stream objects

@@ -1,7 +1,9 @@
 Metadata-Version: 2.4
 Name: multi_function_agent
-Version: 1.2.2.dev0+gc8a7f317e.d20250927
+Version: 0.0.0
 Summary: Custom NeMo Agent Toolkit Workflow
 Classifier: Programming Language :: Python
 Requires-Python: <3.13,>=3.11
+License-File: LICENSE
 Requires-Dist: nvidia-nat[langchain]
+Dynamic: license-file

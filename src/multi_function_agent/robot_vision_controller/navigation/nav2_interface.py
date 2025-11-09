@@ -2,6 +2,8 @@
 Nav2 Interface Module
 Python interface for Nav2 navigation stack integration.
 """
+import sys
+from pathlib import Path
 
 import time
 import logging

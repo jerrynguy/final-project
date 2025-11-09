@@ -48,11 +48,32 @@ class RobotVisionModelManager:
     
     def __init__(
         self,
-        yolo_model_path: str = "/home/dung/nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent/robot_vision_controller/model/yolo11n.pt"
+        yolo_model_path: str = None  # Dynamic path resolution
     ):
         """
         Initialize model manager (YOLO only).
         """
+        # Dynamic model path resolution
+        if yolo_model_path is None:
+            model_paths = [
+                "/workspace/persistent_data/models/yolo11n.pt",  # Container volume
+                Path.home() / "nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent/robot_vision_controller/model/yolo11n.pt",  # Host
+                Path.home() / ".local/share/Ultralytics/models/yolo11n.pt",  # Cache
+                "yolo11n.pt"  # Auto-download
+            ]
+            
+            for path in model_paths:
+                if isinstance(path, str):
+                    path = Path(path)
+                if path.exists():
+                    yolo_model_path = str(path)
+                    logger.info(f"✅ Found YOLO model: {yolo_model_path}")
+                    break
+            
+            if yolo_model_path is None:
+                yolo_model_path = "yolo11n.pt"
+                logger.warning("⏳ Model not found, will auto-download")
+        
         self.yolo_model_path = yolo_model_path
         
         # Model instance
