@@ -27,7 +27,14 @@ from multi_function_agent.robot_vision_controller.navigation.robot_controller_in
 
 from multi_function_agent.robot_vision_controller.core.query_extractor import QueryExtractor
 from multi_function_agent.robot_vision_controller.core.ros2_node import get_ros2_node
-from multi_function_agent.robot_vision_controller.core.mission_controller import MissionController
+from multi_function_agent.robot_vision_controller.core.mission_controller import (
+    MissionController,
+    MissionRequirementsError
+)
+from multi_function_agent.robot_vision_controller.core.goal_parser import (
+    MissionParsingError,
+    UnsupportedMissionError
+)
 from multi_function_agent.robot_vision_controller.core.models import (
     get_robot_vision_model_manager,
     preload_robot_vision_model,
@@ -168,7 +175,58 @@ async def robot_vision_controller(
         
         # Parse mission using MissionController.from_prompt()
         user_prompt = builder._workflow_builder.general_config.front_end.input_query[0]
-        mission_controller = await MissionController.from_prompt(user_prompt, builder)
+        try:
+            mission_controller = await MissionController.from_prompt(user_prompt, builder)
+        
+        except UnsupportedMissionError as e:
+            error_msg = (
+                f"❌ Mission Not Supported\n\n"
+                f"{str(e)}\n\n"
+                f"Your prompt: '{user_prompt}'\n\n"
+                f"Supported missions:\n"
+                f"  • follow_target: 'Follow the person', 'Track the dog'\n"
+                f"  • patrol_laps: 'Patrol 5 laps', 'Go around 10 times'\n"
+                f"  • explore_area: 'Explore freely' (SLAM required - not yet available)\n"
+            )
+            logger.error(error_msg)
+            
+            yield FunctionInfo.from_fn(
+                lambda x: error_msg,
+                description="Mission type not supported"
+            )
+            return
+        
+        except MissionRequirementsError as e:
+            error_msg = (
+                f"❌ Mission Requirements Not Met\n\n"
+                f"{str(e)}\n\n"
+                f"Your mission: '{mission_controller.mission.type if 'mission_controller' in locals() else 'unknown'}'\n"
+            )
+            logger.error(error_msg)
+            
+            yield FunctionInfo.from_fn(
+                lambda x: error_msg,
+                description="Mission requirements not met"
+            )
+            return
+        
+        except MissionParsingError as e:
+            error_msg = (
+                f"❌ Mission Parsing Failed\n\n"
+                f"{str(e)}\n\n"
+                f"Your prompt: '{user_prompt}'\n\n"
+                f"Please rephrase your command. Examples:\n"
+                f"  • 'Follow the person in front'\n"
+                f"  • 'Patrol 5 circular laps'\n"
+                f"  • 'Track the dog'\n"
+            )
+            logger.error(error_msg)
+            
+            yield FunctionInfo.from_fn(
+                lambda x: error_msg,
+                description="Could not parse mission"
+            )
+            return
         
         # CHANGED: Removed processor, model parameters
         control_start_time = time.time()

@@ -8,10 +8,18 @@ import logging
 import numpy as np
 from typing import Dict, List, Optional
 
-from multi_function_agent.robot_vision_controller.core.goal_parser import Mission, parse_mission_from_prompt
+from multi_function_agent.robot_vision_controller.core.goal_parser import (
+    Mission, 
+    parse_mission_from_prompt,
+    MissionParsingError,
+    UnsupportedMissionError
+)
 
 logger = logging.getLogger(__name__)
 
+class MissionRequirementsError(Exception):
+    """Raised when mission requirements are not met."""
+    pass
 
 # =============================================================================
 # Mission Controller
@@ -27,8 +35,56 @@ class MissionController:
         Initialize mission controller.
         """
         self.mission = mission
+        self._validate_mission_requirements()
         self.state = self._initialize_state()
         self.start_time = time.time()
+
+    def _validate_mission_requirements(self):
+        """
+        Validate that system meets mission requirements.
+        
+        Raises:
+            MissionRequirementsError: If requirements not met
+        """
+        import os
+        
+        mission_type = self.mission.type
+        
+        if mission_type == 'explore_area':
+            # SLAM requirement
+            raise MissionRequirementsError(
+                "Mission 'explore_area' requires SLAM Toolbox integration. "
+                "Feature not yet implemented. Please use 'patrol_laps' with existing map "
+                "or 'follow_target' for object tracking."
+            )
+        
+        elif mission_type == 'patrol_laps':
+            # Map file requirement
+            map_path = os.path.expanduser("~/my_map.yaml")
+            
+            if not os.path.exists(map_path):
+                raise MissionRequirementsError(
+                    f"Mission 'patrol_laps' requires a pre-built map at {map_path}. "
+                    f"Map not found. Please create map first using manual SLAM:\n"
+                    f"1. ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True\n"
+                    f"2. ros2 run turtlebot3_teleop teleop_keyboard\n"
+                    f"3. ros2 run nav2_map_server map_saver_cli -f ~/my_map"
+                )
+            
+            logger.info(f"[MISSION VALIDATION] Map found: {map_path}")
+        
+        elif mission_type == 'follow_target':
+            # Check target_class provided
+            if not self.mission.target_class:
+                raise MissionRequirementsError(
+                    "Mission 'follow_target' requires a target_class. "
+                    "Example: 'Follow the person' or 'Follow the dog'"
+                )
+            
+            logger.info(f"[MISSION VALIDATION] Target tracking: {self.mission.target_class}")
+        
+        else:
+            raise MissionRequirementsError(f"Unknown mission type: {mission_type}")
 
     # Class method to create from user prompt
     @classmethod
@@ -39,12 +95,17 @@ class MissionController:
         try:
             mission = await parse_mission_from_prompt(user_prompt, builder)
             logger.info(f"[MISSION] Parsed: {mission.type} - {mission.description}")
+            
+            # Validation happens in __init__()
             return cls(mission)
+            
+        except (MissionParsingError, UnsupportedMissionError, MissionRequirementsError):
+            # Re-raise to be handled by main.py
+            raise
+        
         except Exception as e:
-            logger.warning(f"Failed to parse mission, using default explore: {e}")
-            default_mission = Mission(type='explore_area', description='Default exploration')
-            return cls(default_mission)
-            # Unified frame processing
+            logger.error(f"Unexpected error creating mission controller: {e}")
+            raise MissionParsingError(f"Failed to create mission: {str(e)}")
             
     def process_frame(
         self,
