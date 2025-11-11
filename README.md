@@ -385,8 +385,9 @@ docker run -it --rm \
     "${@:-bash}"
 
 # Usage examples:
+# root@dung-HP-ZBook-Firefly-15-6-inch-G8-Mobile-Workstation-PC:/workspace/mounted_code# python3 /workspace/mounted_code/src/multi_function_agent/robot_vision_controller/test_integration.py
 # ./run_hybrid_container.sh  # Interactive bash
-# ./run_hybrid_container.sh "nat run --config_file /workspace/mounted_code/configs/config.yml --input 'Navigate to (2.0, 3.0)'"
+# ./run_hybrid_container.sh "nat run --config_file /workspace/mounted_code/src/multi_function_agent/configs/config.yml --input 'Navigate to (2.0, 3.0)'"
 
 ```
 

@@ -2,68 +2,11 @@
 Nav2 Interface Module
 Python interface for Nav2 navigation stack integration.
 """
-import sys
-from pathlib import Path
-
-import time
 import logging
-import threading
 from enum import Enum
-from typing import Optional, Tuple, Callable
+from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-try:
-    import rclpy
-    from rclpy.node import Node
-    from rclpy.action import ActionClient
-    from nav2_msgs.action import NavigateToPose
-    from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion
-    from nav_msgs.msg import Path
-    from std_msgs.msg import Bool
-    from tf_transformations import quaternion_from_euler
-    
-    NAV2_AVAILABLE = True
-except ImportError:
-    NAV2_AVAILABLE = False
-    logger.warning("Nav2 packages not available - using fallback mode")
-    
-    # Mock all classes for graceful degradation
-    class Node:
-        def __init__(self, name):
-            self.name = name
-        def get_clock(self):
-            class Clock:
-                def now(self):
-                    class Time:
-                        def to_msg(self): return None
-                    return Time()
-            return Clock()
-        def create_subscription(self, *args, **kwargs):
-            return None
-    
-    class ActionClient:
-        def __init__(self, *args, **kwargs):
-            pass
-        def wait_for_server(self, timeout_sec=1.0):
-            return False
-    
-    NavigateToPose = None
-    Path = None
-    PoseStamped = type('PoseStamped', (), {
-        'header': type('Header', (), {'frame_id': '', 'stamp': None})(),
-        'pose': type('Pose', (), {
-            'position': type('Point', (), {'x': 0.0, 'y': 0.0, 'z': 0.0})(),
-            'orientation': type('Quaternion', (), {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0})()
-        })()
-    })
-    Pose = None
-    Point = None
-    Quaternion = None
-    Bool = None
-    
-    def quaternion_from_euler(*args, **kwargs):
-        return [0, 0, 0, 1]
 
 # =============================================================================
 # Navigation State
@@ -135,8 +78,3 @@ class Nav2Interface:
     
     def is_navigating(self) -> bool:
         return self.get_state() == NavigationState.NAVIGATING
-    
-    def get_current_path(self) -> Optional[Path]: # type: ignore
-        # Not implemented in daemon mode
-        return None
-

@@ -2,13 +2,14 @@
 RTSP Stream Handler Module
 Real-time video stream management with automatic reconnection and frame buffering.
 """
-
+import os
+import sys
 import cv2
 import time
 import yaml
 import logging
-import asyncio
 import threading
+import contextlib
 import numpy as np
 from queue import Queue, Empty
 from dataclasses import dataclass
@@ -18,6 +19,17 @@ from multi_function_agent.robot_vision_controller.utils.geometry_utils import Fa
 
 logger = logging.getLogger(__name__)
 
+# Suppress FFmpeg stderr warnings (expected when stream not available)
+@contextlib.contextmanager
+def suppress_ffmpeg_stderr():
+    """Context manager to suppress FFmpeg stderr output."""
+    original_stderr = sys.stderr
+    try:
+        sys.stderr = open(os.devnull, 'w')
+        yield
+    finally:
+        sys.stderr.close()
+        sys.stderr = original_stderr
 
 # =============================================================================
 # Stream Information Data Structure
@@ -121,8 +133,9 @@ class RTSPStreamHandler:
         Validate RTSP stream connectivity and frame availability.
         """
         try:
-            cap = cv2.VideoCapture(stream_url)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            with suppress_ffmpeg_stderr():
+                cap = cv2.VideoCapture(stream_url)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             
             if not cap.isOpened():
                 return False, "Cannot connect to stream"
@@ -150,7 +163,8 @@ class RTSPStreamHandler:
             await self.stop_stream()
             
             self._stream_url = stream_url
-            self._cap = cv2.VideoCapture(stream_url)
+            with suppress_ffmpeg_stderr():
+                self._cap = cv2.VideoCapture(stream_url)
             
             # Configure capture settings
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -268,9 +282,10 @@ class RTSPStreamHandler:
         try:
             if self._cap:
                 self._cap.release()
-            
-            self._cap = cv2.VideoCapture(self._stream_url)
-            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+            with suppress_ffmpeg_stderr():
+                self._cap = cv2.VideoCapture(self._stream_url)
+                self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self._cap.set(cv2.CAP_PROP_FPS, self.config['target_fps'])
             
             if self._cap.isOpened():

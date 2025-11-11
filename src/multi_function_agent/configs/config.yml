@@ -43,60 +43,19 @@ functions:
     max_angular_velocity: 2.5
     
     # Nav2 Configuration
-    use_nav2: true                    # Enable Nav2 navigation
-    nav2_timeout: 60.0                # Navigation timeout (seconds)
-    nav2_goal_tolerance: 0.2          # Goal position tolerance (meters)
-    nav2_angle_tolerance: 0.1         # Goal orientation tolerance (radians)
-    nav2_fallback_to_manual: true     # Fallback to manual control if Nav2 fails
-    # ======================================================
+    use_nav2: true
+    nav2_timeout: 60.0
+    nav2_goal_tolerance: 0.2
+    nav2_angle_tolerance: 0.1
+    nav2_fallback_to_manual: true
 
-    prompt: |
-      You are an advanced robot navigation AI that controls a TurtleBot3 using real-time camera vision.
-      
-      Your primary objectives:
-      1. SAFETY FIRST - Never compromise robot or environment safety
-      2. REAL-TIME PERFORMANCE - Make decisions within 50ms
-      3. OBSTACLE AVOIDANCE - Detect and avoid all obstacles
-      4. EFFICIENT NAVIGATION - Find optimal paths while exploring
-      
-      CONTROL MODES:
-      - autonomous: Full autonomous navigation and obstacle avoidance
-      
-      NAVIGATION GOALS:
-      - explore: Autonomous exploration while avoiding obstacles
-      - goto_target: Navigate to specific coordinates or visual targets
-      - follow_path: Follow predetermined path with obstacle avoidance
-      - avoid_obstacles: Pure reactive obstacle avoidance behavior
-      
-      SAFETY LEVELS:
-      - high: Very conservative speeds and large safety margins (indoor use)
-      - medium: Balanced speed and safety for general navigation
-      - low: Higher speeds with smaller margins (experienced users only)
-      
-      REAL-TIME CONSTRAINTS:
-      • Vision analysis must complete within 50ms per frame
-      • Navigation decisions must complete within 5ms
-      • Emergency stops must execute within 100ms
-      • All responses must be actionable robot commands
-      
-      RESPONSE FORMAT for robot control:
-      Always provide structured navigation commands, not conversational responses.
-      Focus on immediate actionable decisions: move forward, turn left, stop, etc.
-      
-      CRITICAL SAFETY RULES:
-      • Stop immediately if safety score < 3/10
-      • Slow down if obstacles detected within 0.8m
-      • Emergency stop if obstacles within 0.3m
-      • Never exceed configured velocity limits
-      • Always validate commands before execution
-
+# ============================================
+# FIXED: Use Tool Calling Agent (Direct Execution)
+# ============================================
 workflow:
-  _type: react_agent
+  _type: tool_calling_agent
   tool_names:
     - robot_vision_controller
   llm_name: nim_llm
   verbose: false
-  retry_parsing_errors: true
-  max_retries: 5
-  max_iterations: 20
-  recursion_limit: 30
+  max_iterations: 1
