@@ -5,41 +5,44 @@ import logging
 import asyncio
 from typing import AsyncGenerator, Dict, Any, Optional, Tuple
 
-from multi_function_agent.robot_vision_controller.utils.log.error_handlers import ErrorHandlers
-from multi_function_agent.robot_vision_controller.utils.log.output_formatter import OutputFormatter
-from multi_function_agent.robot_vision_controller.utils.log.performance_logger import PerformanceLogger
-from multi_function_agent.robot_vision_controller.utils.safety_checks import SafetyValidator
+from multi_function_agent._robot_vision_controller.utils.log.error_handlers import ErrorHandlers
+from multi_function_agent._robot_vision_controller.utils.log.output_formatter import OutputFormatter
+from multi_function_agent._robot_vision_controller.utils.log.performance_logger import PerformanceLogger
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator
 
-from multi_function_agent.robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
-from multi_function_agent.robot_vision_controller.perception.rtsp_stream_handler import RTSPStreamHandler
-from multi_function_agent.robot_vision_controller.perception.robot_vision_analyzer import RobotVisionAnalyzer
+from multi_function_agent._robot_vision_controller.perception.slam_controller import SLAMController
+from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
+from multi_function_agent._robot_vision_controller.perception.rtsp_stream_handler import RTSPStreamHandler
+from multi_function_agent._robot_vision_controller.perception.robot_vision_analyzer import RobotVisionAnalyzer
 
-from multi_function_agent.robot_vision_controller.navigation.navigation_reasoner import NavigationReasoner
-from multi_function_agent.robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
+from multi_function_agent._robot_vision_controller.navigation.navigation_reasoner import NavigationReasoner
+from multi_function_agent._robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
 try:
-    from multi_function_agent.robot_vision_controller.navigation.nav2_interface import NavigationState
+    from multi_function_agent._robot_vision_controller.navigation.nav2_interface import NavigationState
     NAV2_STATE_AVAILABLE = True
 except ImportError:
     NavigationState = None
     NAV2_STATE_AVAILABLE = False
 # ==================================
-from multi_function_agent.robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
+from multi_function_agent._robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
 
-from multi_function_agent.robot_vision_controller.core.query_extractor import QueryExtractor
-from multi_function_agent.robot_vision_controller.core.ros2_node import get_ros2_node
-from multi_function_agent.robot_vision_controller.core.mission_controller import (
+from multi_function_agent._robot_vision_controller.core.query_extractor import QueryExtractor
+from multi_function_agent._robot_vision_controller.core.ros2_node import get_ros2_node
+from multi_function_agent._robot_vision_controller.core.mission_controller import (
     MissionController,
     MissionRequirementsError
 )
-from multi_function_agent.robot_vision_controller.core.goal_parser import (
+from multi_function_agent._robot_vision_controller.core.goal_parser import (
     MissionParsingError,
     UnsupportedMissionError
 )
-from multi_function_agent.robot_vision_controller.core.models import (
+from multi_function_agent._robot_vision_controller.core.models import (
     get_robot_vision_model_manager,
     preload_robot_vision_model,
     is_yolo_ready,
 )
+from multi_function_agent.register import RobotVisionConfig
+
 from aiq.builder.builder import Builder # type: ignore
 from aiq.builder.function_info import FunctionInfo # type: ignore
 from aiq.cli.register_workflow import register_function # type: ignore
@@ -52,34 +55,6 @@ except ImportError:
     ROS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# Configuration
-# =============================================================================
-
-class RobotVisionConfig(FunctionBaseConfig, name="robot_vision_controller"):
-    """Configuration for robot vision control system."""
-    
-    stream_url: str = Field(
-        default="rtsp://127.0.0.1:8554/robotcam",
-        description="RTSP stream URL from robot camera",
-    )
-    control_mode: str = Field(
-        default="autonomous",
-        description="Control mode: 'autonomous'",
-    )
-    navigation_goal: str = Field(
-        default="explore",
-        description="Navigation goal: 'explore'",
-    )
-    safety_level: str = Field(
-        default="high",
-        description="Safety level: 'high', 'medium', 'low'",
-    )
-    max_speed: float = Field(
-        default=0.5,
-        description="Maximum robot speed (m/s)",
-    )
 
 # =============================================================================
 # Global Initialization
@@ -107,7 +82,7 @@ else:
 # Main Controller Function
 # =============================================================================
 
-async def robot_vision_controller(
+async def _robot_vision_controller(
     config: RobotVisionConfig, 
     builder: Builder
 ) -> AsyncGenerator[FunctionInfo, None]:
@@ -228,7 +203,31 @@ async def robot_vision_controller(
             )
             return
         
-        # CHANGED: Removed processor, model parameters
+        # Initialize SLAM if explore mission 
+        slam_controller = None
+        if mission_controller.mission.type == 'explore_area':
+            logger.info("[SLAM] Initializing for exploration mission...")
+            slam_controller = SLAMController(map_save_path="~/my_map")
+            
+            slam_started = slam_controller.start_slam()
+            if not slam_started:
+                error_msg = (
+                    "❌ SLAM Failed to Start\n\n"
+                    "Could not start SLAM Toolbox. Please check:\n"
+                    "1. ROS2 environment sourced\n"
+                    "2. slam_toolbox installed: sudo apt install ros-humble-slam-toolbox\n"
+                    "3. Gazebo simulation running\n"
+                )
+                logger.error(error_msg)
+                
+                yield FunctionInfo.from_fn(
+                    lambda x: error_msg,
+                    description="SLAM initialization failed"
+                )
+                return
+            
+            logger.info("[SLAM] Mapping started successfully")
+        
         control_start_time = time.time()
         control_results = await run_robot_control_loop(
             stream_url,
@@ -239,9 +238,26 @@ async def robot_vision_controller(
             safety_validator,
             safety_monitor,
             mission_controller,
+            slam_controller=slam_controller,
             nav2_ready=nav2_ready,
             max_iterations=None,
         )
+
+        # Stop SLAM if it was running 
+        if slam_controller and slam_controller.is_running:
+            logger.info("[SLAM] Stopping and saving final map...")
+            slam_controller.stop_slam(save_final_map=True)
+            
+            # Verify map quality
+            is_valid, reason = slam_controller.verify_map_quality()
+            if is_valid:
+                logger.info(f"[SLAM] ✅ Map created successfully: ~/my_map.yaml")
+                control_results['slam_map_created'] = True
+                control_results['slam_map_path'] = slam_controller.map_save_path
+            else:
+                logger.warning(f"[SLAM] ⚠️ Map quality issue: {reason}")
+                control_results['slam_map_created'] = False
+                control_results['slam_error'] = reason
         
         # Format output
         formatted_output = OutputFormatter.format_control_results(
@@ -250,6 +266,16 @@ async def robot_vision_controller(
             control_mode, 
             mission_controller.mission
         )
+
+        # Add SLAM info to output if applicable
+        if slam_controller:
+            slam_stats = slam_controller.get_mapping_stats()
+            formatted_output += f"\n\n=== SLAM Mapping Results ===\n"
+            formatted_output += f"Duration: {slam_stats['duration']:.1f}s\n"
+            formatted_output += f"Map saved: {slam_stats['map_exists']}\n"
+            if slam_stats['map_exists']:
+                formatted_output += f"Map path: {slam_stats['map_path']}.yaml\n"
+                formatted_output += f"Map size: {slam_stats['yaml_size']}B (YAML), {slam_stats['pgm_size']}B (PGM)\n"   
         
         # Update performance metrics
         control_time = time.time() - control_start_time
@@ -276,6 +302,11 @@ async def robot_vision_controller(
             logger.info("Mission completed, cleaning up...")
                     
     except Exception as e:
+        # Emergency cleanup
+        if 'slam_controller' in locals() and slam_controller and slam_controller.is_running:
+            logger.warning("[SLAM] Emergency shutdown due to error")
+            slam_controller.stop_slam(save_final_map=True)
+
         logger.error(f"Error in robot vision control: {e}")
         
         yield FunctionInfo.from_fn(
@@ -354,6 +385,7 @@ async def run_robot_control_loop(
     safety_validator: SafetyValidator,
     safety_monitor: LidarSafetyMonitor,
     mission_controller: MissionController, 
+    slam_controller: Optional[SLAMController] = None,
     nav2_ready: bool = False,
     max_iterations: int = None,
 ) -> Dict[str, Any]:
@@ -378,6 +410,7 @@ async def run_robot_control_loop(
     iteration = 0
     last_vision_update = 0
     cached_vision_analysis = None
+    last_slam_save = 0
 
     while max_iterations is None or iteration < max_iterations:
         try:
@@ -475,11 +508,24 @@ async def run_robot_control_loop(
                 robot_pos=robot_pos,
                 frame_info=frame_info
             )
+
+            if slam_controller and slam_controller.is_running:
+                current_time = time.time()
+                if current_time - last_slam_save >= 5.0:  # Save every 5s
+                    saved = slam_controller.auto_save_map()
+                    if saved:
+                        last_slam_save = current_time
+                        logger.info("[SLAM] Map auto-saved")
             
             # Check for mission completion
             if mission_result['completed']:
-                logger.info(f"[MISSION COMPLETE] {mission.description}")
-                logger.info(f"Progress: {mission_result['state']}")
+                logger.info(f"[MISSION COMPLETE] {mission_controller.mission.description}")
+                
+                # Save final SLAM map if explore mission
+                if slam_controller and slam_controller.is_running:
+                    logger.info("[SLAM] Saving final map...")
+                    slam_controller.save_map()
+                
                 results["final_status"] = "mission_completed"
                 break
 
@@ -624,11 +670,21 @@ async def run_robot_control_loop(
             await asyncio.sleep(0.05)
             
         except asyncio.CancelledError:
+            # Save SLAM map on interruption
+            if slam_controller and slam_controller.is_running:
+                logger.info("[SLAM] Saving map before interruption...")
+                slam_controller.save_map()
+            
             results["final_status"] = "user_interrupted"
             logger.info("Control loop interrupted")
             break
             
         except Exception as e:
+            # Emergency save on error
+            if slam_controller and slam_controller.is_running:
+                logger.warning("[SLAM] Emergency save due to error")
+                slam_controller.save_map()
+                
             logger.error(f"Control loop error: {e}")
             results["final_status"] = f"error: {e}"
             # Emergency stop on error

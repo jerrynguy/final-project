@@ -15,7 +15,7 @@ from queue import Queue, Empty
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from multi_function_agent.robot_vision_controller.utils.geometry_utils import FastFrameProcessor
+from multi_function_agent._robot_vision_controller.utils.geometry_utils import FastFrameProcessor
 
 logger = logging.getLogger(__name__)
 

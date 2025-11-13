@@ -7,7 +7,10 @@ import logging
 from enum import Enum
 from typing import Dict, Any
 from dataclasses import dataclass
-from geometry_msgs.msg import Twist, Vector3
+try:
+    from geometry_msgs.msg import Twist, Vector3
+except ImportError:
+    from multi_function_agent._robot_vision_controller.utils.ros2_stubs import Twist, Vector3
 
 logger = logging.getLogger(__name__)
 

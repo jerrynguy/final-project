@@ -11,7 +11,7 @@ from enum import Enum
 from ultralytics import YOLO
 from typing import Dict, List, Optional
 
-from multi_function_agent.robot_vision_controller.utils.safety_checks import SafetyValidator
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator
 
 try:
     from sensor_msgs.msg import LaserScan

@@ -10,11 +10,11 @@ import numpy as np
 from typing import Dict, List, Optional
 
 from ultralytics import YOLO
-from multi_function_agent.robot_vision_controller.perception.spatial_detector import SpatialDetector
-from multi_function_agent.robot_vision_controller.navigation.navigation_reasoner import NavigationReasoner
-from multi_function_agent.robot_vision_controller.utils.safety_checks import SafetyValidator
-from multi_function_agent.robot_vision_controller.utils.geometry_utils import FastFrameProcessor
-from multi_function_agent.robot_vision_controller.core.models import get_robot_vision_model_manager
+from multi_function_agent._robot_vision_controller.perception.spatial_detector import SpatialDetector
+from multi_function_agent._robot_vision_controller.navigation.navigation_reasoner import NavigationReasoner
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator
+from multi_function_agent._robot_vision_controller.utils.geometry_utils import FastFrameProcessor
+from multi_function_agent._robot_vision_controller.core.models import get_robot_vision_model_manager
 
 logger = logging.getLogger(__name__)
 

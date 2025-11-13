@@ -28,6 +28,10 @@ functions:
     description: "Real-time robot vision navigation and control system"
     
     # SLAM Configuration
+    use_slam: true
+    slam_map_save_path: "~/my_map"  # Path for auto-generated maps
+    slam_auto_save_interval: 5.0  # Save map every N seconds during exploration
+    slam_min_mapping_duration: 30.0  # Minimum exploration time for valid map
     use_lidar: true
     lidar_topic: "/scan"
     max_lidar_range: 3.5

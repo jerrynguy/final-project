@@ -62,8 +62,8 @@ except ImportError:
     ROS_AVAILABLE = False
 
 try:
-    from multi_function_agent.robot_vision_controller.utils.safety_checks import validate_robot_command_safety
-    from multi_function_agent.robot_vision_controller.utils.ros_interface import ROSManager
+    from multi_function_agent._robot_vision_controller.utils.safety_checks import validate_robot_command_safety
+    from multi_function_agent._robot_vision_controller.utils.ros_interface import ROSManager
     
 except ImportError:    
     def validate_robot_command_safety(twist, config):
@@ -80,11 +80,11 @@ logger = logging.getLogger(__name__)
 # Thêm vào đầu file, sau các import ROS2 hiện có (dòng ~30)
 
 try:
-    from multi_function_agent.robot_vision_controller.navigation.nav2_interface import (
+    from multi_function_agent._robot_vision_controller.navigation.nav2_interface import (
         Nav2Interface,
         NavigationState
     )
-    from multi_function_agent.robot_vision_controller.core.ros2_node import get_ros2_node
+    from multi_function_agent._robot_vision_controller.core.ros2_node import get_ros2_node
     NAV2_AVAILABLE = True
 except ImportError:
     Nav2Interface = None
@@ -319,7 +319,7 @@ class RobotControllerInterface(Node):
         if self.lidar_data is None:
             return True
         
-        from multi_function_agent.robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
+        from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
         safety_monitor = LidarSafetyMonitor()
         
         min_dist = safety_monitor.get_min_distance(self.lidar_data)
@@ -420,7 +420,7 @@ class RobotControllerInterface(Node):
             interval = 1.0 / publish_rate
             iterations = int(duration / interval)
             
-            from multi_function_agent.robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
+            from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
             safety_monitor = LidarSafetyMonitor()
             
             for i in range(max(1, iterations)):

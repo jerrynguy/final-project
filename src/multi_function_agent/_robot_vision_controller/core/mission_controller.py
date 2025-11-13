@@ -3,12 +3,13 @@ Mission Controller Module
 Tracks mission progress and generates navigation directives for robot missions.
 """
 
+import subprocess
 import time
 import logging
 import numpy as np
 from typing import Dict, List, Optional
 
-from multi_function_agent.robot_vision_controller.core.goal_parser import (
+from multi_function_agent._robot_vision_controller.core.goal_parser import (
     Mission, 
     parse_mission_from_prompt,
     MissionParsingError,
@@ -51,12 +52,26 @@ class MissionController:
         mission_type = self.mission.type
         
         if mission_type == 'explore_area':
-            # SLAM requirement
-            raise MissionRequirementsError(
-                "Mission 'explore_area' requires SLAM Toolbox integration. "
-                "Feature not yet implemented. Please use 'patrol_laps' with existing map "
-                "or 'follow_target' for object tracking."
-            )
+            # SLAM requirement - NOW SUPPORTED!
+            # Just log that SLAM will be started
+            logger.info("[MISSION VALIDATION] Explore mission will start SLAM mapping")
+            
+            # Check if slam_toolbox is installed
+            try:
+                result = subprocess.run(
+                    ['ros2', 'pkg', 'list'],
+                    capture_output=True,
+                    text=True,
+                    timeout=3.0
+                )
+                
+                if 'slam_toolbox' not in result.stdout:
+                    raise MissionRequirementsError(
+                        "Mission 'explore_area' requires slam_toolbox package. "
+                        "Install: sudo apt install ros-humble-slam-toolbox"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not verify slam_toolbox: {e}")
         
         elif mission_type == 'patrol_laps':
             # Map file requirement
@@ -65,7 +80,8 @@ class MissionController:
             if not os.path.exists(map_path):
                 raise MissionRequirementsError(
                     f"Mission 'patrol_laps' requires a pre-built map at {map_path}. "
-                    f"Map not found. Please create map first using manual SLAM:\n"
+                    f"Map not found. Please run 'explore_area' mission first to create map, "
+                    f"or create map manually using SLAM:\n"
                     f"1. ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True\n"
                     f"2. ros2 run turtlebot3_teleop teleop_keyboard\n"
                     f"3. ros2 run nav2_map_server map_saver_cli -f ~/my_map"
@@ -169,13 +185,16 @@ class MissionController:
         else:  # explore_area
             duration_param = self.mission.parameters.get('duration')
             if duration_param is None:
-                duration_param = float('inf')
+                duration_param = 60.0
 
             return {
                 **base_state,
                 'coverage': self.mission.parameters.get('coverage', 'full'),
                 'duration': duration_param,
-                'areas_visited': set()
+                'area_visited': set(),
+                'slam_enabled': True,
+                'map_saved': False,
+                'mapping_completed': False
             }
     
     def update_state(
@@ -295,7 +314,18 @@ class MissionController:
             self.state['progress'] = 0.0
         else:
             self.state['progress'] = min(1.0, elapsed / duration)
-        
+
+        # Track areas visited (grid-based)
+        if robot_pos:
+            grid_size = 1.0  # 1m x 1m grid cells
+            grid_x = int(robot_pos['x'] / grid_size)
+            grid_y = int(robot_pos['y'] / grid_size)
+            self.state['areas_visited'].add((grid_x, grid_y))
+            
+            # Log coverage
+            if len(self.state['areas_visited']) % 10 == 0:
+                logger.info(f"[EXPLORATION] Covered {len(self.state['areas_visited'])} areas")
+            
         return self.state
     
     def check_completion(self) -> bool:
@@ -325,7 +355,10 @@ class MissionController:
             
             if elapsed >= self.state['duration']:
                 self.state['completed'] = True
-                logger.info(f"[MISSION COMPLETE] Explored for {elapsed:.0f}s")
+                self.state['mapping_complete'] = True
+                
+                areas_count = len(self.state['areas_visited'])
+                logger.info(f"[MISSION COMPLETE] Explored {areas_count} areas in {elapsed:.0f}s")
                 return True
         
         return False

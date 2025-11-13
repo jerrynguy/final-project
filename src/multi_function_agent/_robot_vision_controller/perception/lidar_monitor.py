@@ -8,7 +8,7 @@ import logging
 import numpy as np
 from typing import Dict, Optional
 
-from multi_function_agent.robot_vision_controller.utils.safety_checks import SafetyValidator
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator
 
 logger = logging.getLogger(__name__)
 

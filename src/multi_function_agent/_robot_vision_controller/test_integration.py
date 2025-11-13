@@ -40,7 +40,7 @@ class IntegrationTester:
         logger.info("="*60)
         
         try:
-            from multi_function_agent.robot_vision_controller.core.ros2_node import get_ros2_node
+            from multi_function_agent._robot_vision_controller.core.ros2_node import get_ros2_node
             
             logger.info("Initializing ROS2 bridge...")
             self.ros2_node = get_ros2_node()
@@ -99,7 +99,7 @@ class IntegrationTester:
         logger.info("="*60)
         
         try:
-            from multi_function_agent.robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
+            from multi_function_agent._robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
             
             self.robot_interface = RobotControllerInterface()
             
@@ -235,8 +235,8 @@ class IntegrationTester:
         logger.info("="*60)
         
         try:
-            from multi_function_agent.robot_vision_controller.core.goal_parser import Mission
-            from multi_function_agent.robot_vision_controller.core.mission_controller import MissionController
+            from multi_function_agent._robot_vision_controller.core.goal_parser import Mission
+            from multi_function_agent._robot_vision_controller.core.mission_controller import MissionController
             
             # Mock builder (simplified)
             class MockBuilder:
@@ -377,7 +377,7 @@ class IntegrationTester:
             logger.debug(f"Cleanup command failed: {e}")
         
         try:
-            from multi_function_agent.robot_vision_controller.core.ros2_node import shutdown_ros2
+            from multi_function_agent._robot_vision_controller.core.ros2_node import shutdown_ros2
             shutdown_ros2()
         except Exception as e:
             logger.debug(f"Shutdown failed: {e}")

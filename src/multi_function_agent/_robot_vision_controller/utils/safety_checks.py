@@ -7,7 +7,10 @@ import math
 import logging
 from typing import Dict, Any
 from dataclasses import dataclass
-from geometry_msgs.msg import Twist
+try:
+    from geometry_msgs.msg import Twist
+except ImportError:
+    from multi_function_agent._robot_vision_controller.utils.ros2_stubs import Twist
 
 logger = logging.getLogger(__name__)
 

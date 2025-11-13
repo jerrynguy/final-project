@@ -9,12 +9,12 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from multi_function_agent.robot_vision_controller.utils.movement_commands import (
+from multi_function_agent._robot_vision_controller.utils.movement_commands import (
     CommandFactory,
     NavigationAction,
     NavigationParameters
 )
-from multi_function_agent.robot_vision_controller.utils.safety_checks import SafetyValidator
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator
 
 logger = logging.getLogger(__name__)
 
@@ -364,25 +364,48 @@ class NavigationReasoner:
                 return self._make_navigation_decision(vision_analysis)
         
         # ===== EXPLORATION DIRECTIVES =====
-        elif directive == 'explore_search':
-            # Explore while searching (slower, more thorough)
+        elif directive == 'explore_random':
+            # SLAM exploration: prioritize unvisited areas
+            # Use wider turns to cover more ground
             return {
                 'action': 'move_forward',
                 'parameters': {
-                    'linear_velocity': self.base_speed * 0.6,
-                    'angular_velocity': 0.1,  # Slight sweep
+                    'linear_velocity': self.base_speed * 0.7,
+                    'angular_velocity': 0.15,  # Slight sweep for SLAM coverage
+                    'duration': 1.5
+                },
+                'confidence': 0.8,
+                'reason': 'slam_exploration'
+            }
+        
+        elif directive == 'explore_search':
+            # Thorough SLAM mapping - slower, more coverage
+            return {
+                'action': 'move_forward',
+                'parameters': {
+                    'linear_velocity': self.base_speed * 0.5,
+                    'angular_velocity': 0.2,  # More sweeping motion
                     'duration': 1.0
                 },
                 'confidence': 0.7,
-                'reason': 'searching_exploration'
+                'reason': 'slam_thorough_mapping'
             }
         
         elif directive == 'explore_cautious':
-            # Cautious exploration (avoid mode)
-            return self.command_factory.create_slow_forward_command(safety_score)
+            # Cautious SLAM in tight spaces
+            return {
+                'action': 'move_forward',
+                'parameters': {
+                    'linear_velocity': self.base_speed * 0.4,
+                    'angular_velocity': 0.1,
+                    'duration': 0.8
+                },
+                'confidence': 0.6,
+                'reason': 'slam_cautious'
+            }
         
-        else:  # explore_random or unknown
-            # Default exploration behavior
+        else:  # Default or unknown directive
+            # Standard exploration behavior
             return self._make_navigation_decision(vision_analysis)
     
     def _make_navigation_decision(

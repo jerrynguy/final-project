@@ -30,7 +30,7 @@ class RobotVisionConfig(FunctionBaseConfig, name="robot_vision_controller"):
 async def robot_vision_controller_wrapper(config, builder):
     """Lazy-loading wrapper for robot_vision_controller."""
     # Import only when called
-    from multi_function_agent.robot_vision_controller.main import robot_vision_controller
+    from multi_function_agent._robot_vision_controller.main import robot_vision_controller
     
     # Call and delegate generator
     async for result in robot_vision_controller(config, builder):
