@@ -165,7 +165,7 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 
 ### **Communication Architecture**
 
-![Workflow Diagram](src/multi_function_agent/robot_vision_controller/images/nat_container.png)
+![Workflow Diagram](src/multi_function_agent/_robot_vision_controller/images/nat_container.png)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
