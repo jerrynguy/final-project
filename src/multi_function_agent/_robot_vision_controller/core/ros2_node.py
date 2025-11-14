@@ -230,7 +230,6 @@ class ROS2Daemon:
         print(json.dumps(data), flush=True)
     
     def map_cb(self, msg):
-        # Only send map updates periodically (avoid flooding)
         data = {
             'type': 'slam_map',
             'data': {
@@ -241,7 +240,7 @@ class ROS2Daemon:
                     'x': msg.info.origin.position.x,
                     'y': msg.info.origin.position.y
                 },
-                'data_compressed': True  # Signal that full map is available
+                'data_compressed': True
             }
         }
         print(json.dumps(data), flush=True)
@@ -273,7 +272,6 @@ class ROS2Daemon:
         goal_msg.pose.pose.position.y = y
         goal_msg.pose.pose.position.z = 0.0
         
-        # Quaternion from yaw
         qz = math.sin(theta / 2)
         qw = math.cos(theta / 2)
         goal_msg.pose.pose.orientation.z = qz
@@ -286,22 +284,17 @@ class ROS2Daemon:
         if goal_handle.accepted:
             self.nav2_state = 'navigating'
             self.nav2_goal_handle = goal_handle
-            
-            # Monitor result
             result_future = goal_handle.get_result_async()
             result_future.add_done_callback(self.nav2_result_cb)
-            
             return True
         return False
     
     def nav2_result_cb(self, future):
         result = future.result()
-        if result.status == 4:  # SUCCEEDED
+        if result.status == 4:
             self.nav2_state = 'succeeded'
         else:
             self.nav2_state = 'failed'
-        
-        # Emit state update
         data = {'type': 'nav2_state', 'state': self.nav2_state}
         print(json.dumps(data), flush=True)
     
@@ -331,7 +324,6 @@ class ROS2Daemon:
         
         try:
             while rclpy.ok():
-                # Check for commands from stdin (non-blocking)
                 if select.select([sys.stdin], [], [], 0)[0]:
                     line = sys.stdin.readline().strip()
                     if line:
@@ -341,7 +333,6 @@ class ROS2Daemon:
                         except:
                             pass
                 
-                # Spin ROS2 node
                 rclpy.spin_once(self.node, timeout_sec=0.01)
         
         except KeyboardInterrupt:
@@ -354,6 +345,24 @@ daemon = ROS2Daemon()
 daemon.spin()
 """
         
+        # Prepare ROS2 environment for subprocess
+        import os
+        env_dict = os.environ.copy()
+        
+        # Source ROS2 and extract env vars
+        result = subprocess.run(
+            ['bash', '-c', 'source /opt/ros/humble/setup.bash && env'],
+            capture_output=True, text=True
+        )
+        
+        for line in result.stdout.split('\n'):
+            if '=' in line:
+                parts = line.split('=', 1)
+                if len(parts) == 2:
+                    env_dict[parts[0]] = parts[1]
+        
+        env_dict['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
+        
         try:
             self._daemon_process = subprocess.Popen(
                 [self.system_python, '-c', script],
@@ -361,9 +370,18 @@ daemon.spin()
                 stderr=subprocess.PIPE,
                 stdin=subprocess.PIPE,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                env=env_dict  # ← CRITICAL FIX!
             )
             
+            # Log stderr in separate thread
+            def log_stderr():
+                for line in self._daemon_process.stderr:
+                    logger.error(f"[DAEMON STDERR] {line.strip()}")
+            
+            stderr_thread = threading.Thread(target=log_stderr, daemon=True)
+            stderr_thread.start()
+
             self._monitor_thread = threading.Thread(
                 target=self._read_daemon,
                 daemon=True
