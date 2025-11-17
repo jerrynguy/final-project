@@ -191,7 +191,7 @@ class MissionController:
                 **base_state,
                 'coverage': self.mission.parameters.get('coverage', 'full'),
                 'duration': duration_param,
-                'area_visited': set(),
+                'areas_visited': set(),
                 'slam_enabled': True,
                 'map_saved': False,
                 'mapping_completed': False

@@ -128,9 +128,32 @@ class RobotControllerInterface(Node):
     ROS2 interface for robot control with HTTP bridge fallback.
     """
     
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = None):
         # Get centralized ROS2 node (singleton)
         self.ros_node = get_ros2_node()
+
+        if config_path is None:
+            import os
+            from pathlib import Path
+
+            possible_paths = [
+                "/workspace/mounted_code/src/multi_function_agent/configs/config.yml",  # Container
+                Path(__file__).parent.parent.parent / "configs/config.yml",  # Relative
+                Path.home() / "nemo-agent-toolkit/examples/multi_function_agent/src/multi_function_agent/configs/config.yml",  # Host
+                "config.yaml",  # Current dir fallback
+            ]
+
+            for path in possible_paths:
+                if isinstance(path, Path):
+                    path = str(path)
+                if os.path.exists(path):
+                    config_path = path
+                    logger.info(f"Using config file: {config_path}")
+                    break
+            
+            if config_path is None or not os.path.exists(config_path):
+                logger.warning("No config file found, using defaults")
+                config_path = "config.yaml"  # Will use defaults in loader
         
         self.config = self._load_config(config_path)
         
@@ -183,7 +206,7 @@ class RobotControllerInterface(Node):
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
                 
-                func_config = config.get('functions', {}).get('robot_vision_controller', {})
+                func_config = config.get('functions', {}).get('_robot_vision_controller', {})
                 
                 return {
                     # Robot controller
@@ -209,7 +232,7 @@ class RobotControllerInterface(Node):
                 # =============================================================================
                 
         except FileNotFoundError:
-            logger.warning(f"Config file not found: {config_path}, using defaults")
+            logger.info(f"Config file not found at {config_path}, using built-in defaults")
             return {
                 'min_command_interval': 0.05,
                 'connection_timeout': 3.0,

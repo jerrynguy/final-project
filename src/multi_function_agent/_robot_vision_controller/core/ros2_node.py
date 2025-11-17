@@ -118,6 +118,9 @@ class ROS2Bridge:
     def _start_monitor(self):
         """Start persistent daemon subprocess."""
         self._running = True
+
+        import os
+        import tempfile
         
         # Create empty queue file
         try:
@@ -344,9 +347,18 @@ class ROS2Daemon:
 daemon = ROS2Daemon()
 daemon.spin()
 """
+
+        # Write script to temp file for better subprocess handling
+        script_fd, script_path = tempfile.mkstemp(suffix='.py', prefix='ros2_daemon_')
+        try:
+            with os.fdopen(script_fd, 'w') as f:
+                f.write(script)
+            logger.info(f"Daemon script written to: {script_path}")
+        except Exception as e:
+            logger.error(f"Failed to write daemon script: {e}")
+            raise
         
         # Prepare ROS2 environment for subprocess
-        import os
         env_dict = os.environ.copy()
         
         # Source ROS2 and extract env vars
@@ -365,7 +377,7 @@ daemon.spin()
         
         try:
             self._daemon_process = subprocess.Popen(
-                [self.system_python, '-c', script],
+                [self.system_python, script_path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.PIPE,
@@ -391,6 +403,11 @@ daemon.spin()
             logger.info("✅ ROS2 daemon subprocess started")
         except Exception as e:
             logger.error(f"❌ Failed to start daemon: {e}")
+            # Cleanup temp file on failure
+            try:
+                os.remove(script_path)
+            except:
+                pass
             raise
     
     def _read_daemon(self):
@@ -457,6 +474,15 @@ daemon.spin()
             os.remove(self._cmd_queue_file)
         except:
             pass
+
+        # Cleanup temp daemon script
+        try:
+            import glob
+            for f in glob.glob('/tmp/ros2_daemon_*.py'):
+                os.remove(f)
+                logger.debug(f"Cleaned up: {f}")
+        except Exception as e:
+            logger.debug(f"Temp file cleanup failed: {e}")
         
         logger.info("✅ ROS2Bridge shutdown")
 
