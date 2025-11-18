@@ -54,11 +54,8 @@ class LidarSafetyMonitor:
                 if np.isnan(distance) or np.isinf(distance):
                     continue
 
-                # Only check front hemisphere (±90°)
                 angle = angle_min + (i * angle_increment)
                 angle_deg = np.degrees(angle)
-                if not (-90 <= angle_deg <= 90):
-                    continue
                 
                 # Track closest obstacle
                 if distance < min_distance:
@@ -148,17 +145,18 @@ class LidarSafetyMonitor:
                 'reason': 'right_threat_rotate_left'
             }
         
-        # Threat behind (should not happen in front-only check): backup anyway
+        # Threat behind (135° to 180° or -135° to -180°): Move FORWARD away
         else:
+            logger.warning(f"[REAR THREAT] Obstacle behind at {distance:.2f}m, moving forward")
             return {
-                'action': 'move_backward',
+                'action': 'move_forward',
                 'parameters': {
-                    'linear_velocity': -0.3,
+                    'linear_velocity': 0.3,
                     'angular_velocity': 0.0,
-                    'duration': 0.3
+                    'duration': 0.5
                 },
-                'confidence': 0.8,
-                'reason': 'rear_threat_backup'
+                'confidence': 0.9,
+                'reason': f'rear_threat_forward_{distance:.2f}m'
             }
     
     def _emergency_stop(self) -> Dict:
@@ -195,11 +193,8 @@ class LidarSafetyMonitor:
                 if np.isnan(distance) or np.isinf(distance):
                     continue
                 
-                # Only check front hemisphere (±9d0°)
+                # Check ALL directions (360°)
                 angle = angle_min + (i * angle_increment)
-                angle_deg = np.degrees(angle)
-                if not (-90 <= angle_deg <= 90):
-                    continue
                 
                 if distance < min_distance:
                     min_distance = distance

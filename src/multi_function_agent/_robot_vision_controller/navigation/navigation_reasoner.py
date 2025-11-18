@@ -50,6 +50,8 @@ class NavigationReasoner:
         }
         
         self.base_speed = max_speed * self.speed_multipliers.get(safety_level, 0.5)
+
+        self.exploration_boost = 1.0  # Will be set from config via setter
         
         # Decision tracking
         self._last_decision = None
@@ -63,6 +65,13 @@ class NavigationReasoner:
         self.path_lookahead_distance = 1.0
         
         self._setup_decision_parameters()
+
+    def set_exploration_boost(self, boost: float):
+        """
+        Set speed boost factor for exploration missions.
+        """
+        self.exploration_boost = max(1.0, min(2.0, boost))
+        logger.info(f"[NAVIGATION] Exploration speed boost set to: {self.exploration_boost}x")
     
     def _setup_decision_parameters(self):
         """
@@ -367,10 +376,11 @@ class NavigationReasoner:
         elif directive == 'explore_random':
             # SLAM exploration: prioritize unvisited areas
             # Use wider turns to cover more ground
+            boosted_speed = self.base_speed * self.exploration_boost
             return {
                 'action': 'move_forward',
                 'parameters': {
-                    'linear_velocity': self.base_speed * 0.7,
+                    'linear_velocity': boosted_speed * 0.7,
                     'angular_velocity': 0.15,  # Slight sweep for SLAM coverage
                     'duration': 1.5
                 },
@@ -380,10 +390,11 @@ class NavigationReasoner:
         
         elif directive == 'explore_search':
             # Thorough SLAM mapping - slower, more coverage
+            boosted_speed = self.base_speed * self.exploration_boost
             return {
                 'action': 'move_forward',
                 'parameters': {
-                    'linear_velocity': self.base_speed * 0.5,
+                    'linear_velocity': boosted_speed * 0.5,
                     'angular_velocity': 0.2,  # More sweeping motion
                     'duration': 1.0
                 },
@@ -393,10 +404,11 @@ class NavigationReasoner:
         
         elif directive == 'explore_cautious':
             # Cautious SLAM in tight spaces
+            boosted_speed = self.base_speed * self.exploration_boost
             return {
                 'action': 'move_forward',
                 'parameters': {
-                    'linear_velocity': self.base_speed * 0.4,
+                    'linear_velocity': boosted_speed * 0.4,
                     'angular_velocity': 0.1,
                     'duration': 0.8
                 },

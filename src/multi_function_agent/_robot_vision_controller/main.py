@@ -127,6 +127,11 @@ async def _robot_vision_controller(
             safety_level=safety_level, 
             max_speed=robot_config["max_speed"]
         )
+
+        # Apply exploration speed boost if in config
+        exploration_boost = robot_config.get("exploration_speed_boost", 1.0)
+        navigation_reasoner.set_exploration_boost(exploration_boost)
+
         robot_interface = RobotControllerInterface()
         vision_analyzer = RobotVisionAnalyzer(robot_controller=robot_interface)
         safety_monitor = LidarSafetyMonitor()
@@ -374,6 +379,91 @@ def _mission_directive_to_nav2_goal(
     return None
 
 # =============================================================================
+# Nav2 Continuous Safety Monitor
+# =============================================================================
+
+async def _nav2_continuous_safety_monitor(
+    robot_interface,
+    safety_monitor: LidarSafetyMonitor,
+    results: Dict
+) -> None:
+    """
+    Background task for continuous Nav2 safety monitoring.
+    Runs at 20Hz while Nav2 is navigating.
+    """
+    logger.info("[NAV2 MONITOR] Starting continuous safety monitor")
+    
+    try:
+        while robot_interface.nav2_interface.is_navigating():
+            # Get fresh LIDAR data
+            lidar_data = robot_interface.lidar_data
+            
+            if lidar_data is None:
+                logger.warning("[NAV2 MONITOR] No LIDAR data, forcing stop")
+                robot_interface.cancel_nav2_navigation()
+                await robot_interface.execute_command({
+                    'action': 'stop',
+                    'parameters': {'linear_velocity': 0.0, 'angular_velocity': 0.0, 'duration': 0.1},
+                    'reason': 'nav2_monitor_no_lidar'
+                })
+                break
+            
+            # Check safety
+            min_dist = safety_monitor.get_min_distance(lidar_data)
+            
+            if min_dist < safety_monitor.CRITICAL_DISTANCE:
+                logger.error(
+                    f"[NAV2 MONITOR] CRITICAL DISTANCE {min_dist:.2f}m! "
+                    f"Aborting Nav2 navigation"
+                )
+                
+                # Cancel Nav2 goal
+                robot_interface.cancel_nav2_navigation()
+                
+                # Execute emergency stop
+                stop_cmd = {
+                    'action': 'stop',
+                    'parameters': {
+                        'linear_velocity': 0.0,
+                        'angular_velocity': 0.0,
+                        'duration': 0.1
+                    },
+                    'reason': f'nav2_monitor_abort_{min_dist:.2f}m'
+                }
+                await robot_interface.execute_command(stop_cmd)
+                
+                results["navigation_decisions"].append({
+                    'action': 'nav2_abort',
+                    'reason': f'critical_distance_{min_dist:.2f}m',
+                    'distance': min_dist
+                })
+                
+                break
+            
+            elif min_dist < safety_monitor.WARNING_DISTANCE:
+                logger.debug(
+                    f"[NAV2 MONITOR] Warning distance {min_dist:.2f}m "
+                    f"(Nav2 costmap should handle this)"
+                )
+            
+            # Monitor at 20Hz
+            await asyncio.sleep(0.05)
+    
+    except asyncio.CancelledError:
+        logger.info("[NAV2 MONITOR] Monitor cancelled")
+    
+    except Exception as e:
+        logger.error(f"[NAV2 MONITOR] Monitor error: {e}")
+        # Emergency: cancel Nav2 on error
+        try:
+            robot_interface.cancel_nav2_navigation()
+        except:
+            pass
+    
+    finally:
+        logger.info("[NAV2 MONITOR] Continuous safety monitor stopped")
+
+# =============================================================================
 # Control Loop - REFACTORED
 # =============================================================================
 async def run_robot_control_loop(
@@ -414,19 +504,20 @@ async def run_robot_control_loop(
 
     while max_iterations is None or iteration < max_iterations:
         try:
+            lidar_snapshot = robot_interface.lidar_data
             # Get latest camera frame
             frame = await stream_handler.get_latest_frame()
             if frame is None:
                 await asyncio.sleep(0.5)
                 continue
             
-            iteration += 1
+            iteration = 1
             PerformanceLogger.log_iteration_start(iteration)
 
             # PRIORITY 0: ABORT NAV2 IF CRITICAL (NON-BLOCKING CHECK)
             if nav2_ready and robot_interface.nav2_interface:
                 if robot_interface.nav2_interface.is_navigating():
-                    safe = robot_interface.check_nav2_safety()
+                    safe = robot_interface.check_nav2_safety(lidar_override=lidar_snapshot)
                     if not safe:
                         logger.warning("[NAV2 ABORTED] Safety override")
                         results["navigation_decisions"].append({
@@ -436,9 +527,8 @@ async def run_robot_control_loop(
                         continue
             
             # PRIORITY 1: SAFETY CHECK (BLOCKING)
-            lidar_data = robot_interface.lidar_data
             safety_result = await safety_monitor.handle_safety_override(
-                lidar_data, robot_interface, results
+                lidar_snapshot, robot_interface, results
             )
             
             if safety_result['veto']:
@@ -565,6 +655,16 @@ async def run_robot_control_loop(
                     )
                     
                     if nav2_success:
+                        # Spawn continuous safety monitor
+                        monitor_task = asyncio.create_task(
+                             _nav2_continuous_safety_monitor(
+                                 robot_interface,
+                                 safety_monitor,
+                                 results
+                             )
+                         )
+                        logger.info("[NAV2] Continuous safety monitor started")
+                        
                         results["navigation_decisions"].append({
                             'action': 'nav2_goal',
                             'parameters': {'x': goal_x, 'y': goal_y, 'theta': goal_theta},
@@ -618,9 +718,8 @@ async def run_robot_control_loop(
                 # ============================================================
                 
                 # Final safety check with FRESH lidar data
-                lidar_data = robot_interface.lidar_data
-                if lidar_data is not None:
-                    min_dist = safety_monitor.get_min_distance(lidar_data)
+                if lidar_snapshot is not None:
+                    min_dist = safety_monitor.get_min_distance(lidar_snapshot)
                     
                     if min_dist < safety_monitor.CRITICAL_DISTANCE:
                         PerformanceLogger.log_safety_abort(min_dist, navigation_decision['action'])
@@ -643,7 +742,7 @@ async def run_robot_control_loop(
                                 (safety_monitor.WARNING_DISTANCE - safety_monitor.CRITICAL_DISTANCE)
                         scale = max(0.3, min(1.0, scale))
                         
-                        params['linear_velocity'] = params.get('linear_velocity', 0.0) * scale * 0.5
+                        params['linear_velocity'] = params.get('linear_velocity', 0.0) * scale
                         params['angular_velocity'] = params.get('angular_velocity', 0.0) * scale
                         navigation_decision['parameters'] = params
                 else:

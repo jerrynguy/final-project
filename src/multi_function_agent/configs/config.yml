@@ -25,6 +25,7 @@ functions:
     navigation_goal: "explore"
     safety_level: "medium"
     max_speed: 0.6
+    exploration_speed_boost: 1.5  # Multiplier for explore mode (1.5x = medium safety → near-low safety speed)
     description: "Real-time robot vision navigation and control system"
     
     # SLAM Configuration

@@ -214,6 +214,7 @@ class RobotControllerInterface(Node):
                     'connection_timeout': func_config.get('connection_timeout', 3.0),
                     'max_linear_velocity': func_config.get('max_linear_velocity', 0.22),
                     'max_angular_velocity': func_config.get('max_angular_velocity', 2.84),
+                    'exploration_speed_boost': func_config.get('exploration_speed_boost', 1.0),
                     
                     # LIDAR/SLAM
                     'use_lidar': func_config.get('use_lidar', True),
@@ -222,7 +223,7 @@ class RobotControllerInterface(Node):
                     'use_slam_map': func_config.get('use_slam_map', True),
                     'map_topic': func_config.get('map_topic', '/map'),
                     
-                    # Nav2 - THÊM MỚI
+                    # Nav2 
                     'use_nav2': func_config.get('use_nav2', True),
                     'nav2_timeout': func_config.get('nav2_timeout', 60.0),
                     'nav2_goal_tolerance': func_config.get('nav2_goal_tolerance', 0.2),
@@ -238,6 +239,7 @@ class RobotControllerInterface(Node):
                 'connection_timeout': 3.0,
                 'max_linear_velocity': 0.22,
                 'max_angular_velocity': 2.84,
+                'exploration_speed_boost': 1.0,
                 'use_lidar': True,
                 'lidar_topic': '/scan',
                 'max_lidar_range': 3.5,
@@ -331,7 +333,7 @@ class RobotControllerInterface(Node):
             logger.error(f"Failed to send Nav2 goal: {e}")
             return False
         
-    def check_nav2_safety(self) -> bool:
+    def check_nav2_safety(self, lidar_override = None) -> bool:
         """Check Nav2 safety NON-BLOCKING."""
         if not self.use_nav2 or not self.nav2_interface:
             return True
@@ -339,13 +341,15 @@ class RobotControllerInterface(Node):
         if not self.nav2_interface.is_navigating():
             return True
         
-        if self.lidar_data is None:
+        # Use override if provided (for atomic reads)
+        lidar_to_check = lidar_override if lidar_override is not None else self.lidar_data
+        if lidar_to_check is None:
             return True
         
         from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
         safety_monitor = LidarSafetyMonitor()
         
-        min_dist = safety_monitor.get_min_distance(self.lidar_data)
+        min_dist = safety_monitor.get_min_distance(lidar_to_check)
         
         if min_dist < safety_monitor.CRITICAL_DISTANCE:
             logger.error(f"[ABORT NAV2] Obstacle at {min_dist:.2f}m")

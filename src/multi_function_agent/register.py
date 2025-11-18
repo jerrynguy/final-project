@@ -25,6 +25,7 @@ class RobotVisionConfig(FunctionBaseConfig, name="robot_vision_controller"):
     navigation_goal: str = Field(default="explore")
     safety_level: str = Field(default="high")
     max_speed: float = Field(default=0.5)
+    exploration_speed_boost: float = Field(default=1.0, description="Speed multiplier for exploration mode (1.0-2.0)")
 
 @register_function(config_type=RobotVisionConfig)
 async def robot_vision_controller_wrapper(config, builder):

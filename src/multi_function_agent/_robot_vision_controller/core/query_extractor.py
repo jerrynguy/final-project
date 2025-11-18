@@ -108,6 +108,7 @@ class QueryExtractor:
                 ),
                 "safety_level": robot_params.get("safety_level", config.safety_level),
                 "max_speed": config.max_speed,
+                "exploration_speed_boost": getattr(config, 'exploration_speed_boost', 1.0),
             }
         except Exception as e:
             logger.info(f"Could not extract from input_query: {e}")
@@ -119,4 +120,5 @@ class QueryExtractor:
             "navigation_goal": config.navigation_goal,
             "safety_level": config.safety_level,
             "max_speed": config.max_speed,
+            "exploration_speed_boost": getattr(config, 'exploration_speed_boost', 1.0),
         }
