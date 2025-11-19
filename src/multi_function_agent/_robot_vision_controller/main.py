@@ -152,6 +152,35 @@ async def _robot_vision_controller(
         connection_success = await robot_interface.connect()
         if not connection_success:
             logger.warning("Could not connect to robot controller")
+
+        # STARTUP ESCAPE: Back away if spawned too close to obstacle
+        logger.info("[STARTUP] Checking initial position safety...")
+        initial_scan = robot_interface.lidar_data
+
+        if initial_scan:
+            startup_monitor = LidarSafetyMonitor()
+            min_dist = startup_monitor.get_min_distance(initial_scan)
+            if min_dist < 0.5:  # Too close to obstacle
+                logger.warning(f"[STARTUP] Too close to obstacle ({min_dist:.2f}m) - backing away")
+                back_away_cmd = {
+                    "action": "move_backward",
+                    "parameters": {
+                        "linear_velocity": -0.2,
+                        "angular_velocity": 0.0,
+                        "duration": 2.0
+                    },
+                    "reason": "startup_back_away"
+                }
+                escape_success = await robot_interface.execute_command(back_away_cmd)
+                if escape_success:
+                    logger.info("[STARTUP ESCAPE] ✅ Successfully moved away from obstacle")
+                    await asyncio.sleep(0.5)  # Settle time
+                else:
+                    logger.warning("[STARTUP ESCAPE] ⚠️  Escape failed, proceeding with caution")
+            else:
+                logger.info(f"[STARTUP] ✅ Safe initial position (clearance: {min_dist:.2f}m)")
+        else:
+            logger.warning("[STARTUP] No LiDAR data, skipping safety check")
         
         # Parse mission using MissionController.from_prompt()
         user_prompt = builder._workflow_builder.general_config.front_end.input_query[0]

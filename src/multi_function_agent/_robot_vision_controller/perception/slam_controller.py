@@ -26,7 +26,7 @@ class SLAMController:
         Args:
             map_save_path: Path to save generated map (without extension)
         """
-        self.map_save_path = os.path.expanduser(map_save_path)
+        self.map_save_path = map_save_path
         self.slam_process: Optional[subprocess.Popen] = None
         self.is_running = False
         self.start_time: Optional[float] = None
@@ -97,7 +97,6 @@ class SLAMController:
             return False
         
         save_path = map_name if map_name else self.map_save_path
-        save_path = os.path.expanduser(save_path)
         
         try:
             # Create directory if needed
