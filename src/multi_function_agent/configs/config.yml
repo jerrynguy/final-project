@@ -30,7 +30,7 @@ functions:
     
     # SLAM Configuration
     use_slam: true
-    slam_map_save_path: "~/my_map"  # Path for auto-generated maps
+    slam_map_save_path: "/workspace/my_map"  # Path for auto-generated maps
     slam_auto_save_interval: 5.0  # Save map every N seconds during exploration
     slam_min_mapping_duration: 30.0  # Minimum exploration time for valid map
     use_lidar: true

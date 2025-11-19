@@ -193,7 +193,11 @@ class ROS2Daemon:
         self.nav2_goal_handle = None
         
         # Wait for Nav2 server
-        self.nav2_client.wait_for_server()
+        server_available = self.nav2_client.wait_for_server(timeout_sec=5.0)
+        if server_available:
+            print(json.dumps({'type': 'nav2_server', 'available': True}), flush=True)
+        else:
+            print(json.dumps({'type': 'nav2_server', 'available': False}), flush=True)
     
     def lidar_cb(self, msg):
         data = {
@@ -280,16 +284,27 @@ class ROS2Daemon:
         goal_msg.pose.pose.orientation.z = qz
         goal_msg.pose.pose.orientation.w = qw
         
-        send_future = self.nav2_client.send_goal_async(goal_msg)
+        send_future = self.nav2_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.nav2_feedback_cb
+        )
         rclpy.spin_until_future_complete(self.node, send_future, timeout_sec=2.0)
         
         goal_handle = send_future.result()
         if goal_handle.accepted:
             self.nav2_state = 'navigating'
             self.nav2_goal_handle = goal_handle
+            # Broadcast state change immediately
+            data = {'type': 'nav2_state', 'state': 'navigating'}
+            print(json.dumps(data), flush=True)
+
             result_future = goal_handle.get_result_async()
             result_future.add_done_callback(self.nav2_result_cb)
             return True
+        else:
+            self.nav2_state = 'failed'
+            data = {'type': 'nav2_state', 'state': 'failed'}
+            print(json.dumps(data), flush=True)
         return False
     
     def nav2_result_cb(self, future):
@@ -299,6 +314,15 @@ class ROS2Daemon:
         else:
             self.nav2_state = 'failed'
         data = {'type': 'nav2_state', 'state': self.nav2_state}
+        print(json.dumps(data), flush=True)
+
+    def nav2_feedback_cb(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        data = {
+            'type': 'nav2_feedback',
+            'distance_remaining': feedback.distance_remaining,
+            'navigation_time': feedback.navigation_time.sec
+        }
         print(json.dumps(data), flush=True)
     
     def cancel_nav2_goal(self):

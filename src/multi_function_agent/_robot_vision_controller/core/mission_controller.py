@@ -52,39 +52,54 @@ class MissionController:
         mission_type = self.mission.type
         
         if mission_type == 'explore_area':
-            # SLAM requirement - NOW SUPPORTED!
-            # Just log that SLAM will be started
+            # Check SLAM must be started MANUALLY on host
             logger.info("[MISSION VALIDATION] Explore mission will start SLAM mapping")
-            
-            # Check if slam_toolbox is installed
-            try:
-                result = subprocess.run(
-                    ['ros2', 'pkg', 'list'],
-                    capture_output=True,
-                    text=True,
-                    timeout=3.0
+            logger.warning("=" * 60)
+            logger.warning("[MISSION VALIDATION] Explore mission requires SLAM")
+            logger.warning("=" * 60)
+            logger.warning("SLAM Toolbox must be running on HOST before starting:")
+            logger.warning("")
+            logger.warning("  Terminal 1 (HOST):")
+            logger.warning("    ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True")
+            logger.warning("")
+            logger.warning("  Wait 3 seconds, then start this mission.")
+            logger.warning("=" * 60)
+
+            # Verify slam_toolbox exists on host
+            slam_check = input("Is SLAM Toolbox running on host? (y/n): ").lower()
+            if slam_check != 'y':
+                raise MissionRequirementsError(
+                    "Explore mission requires SLAM Toolbox running on host.\n"
+                    "Start: ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True"
                 )
-                
-                if 'slam_toolbox' not in result.stdout:
-                    raise MissionRequirementsError(
-                        "Mission 'explore_area' requires slam_toolbox package. "
-                        "Install: sudo apt install ros-humble-slam-toolbox"
-                    )
-            except Exception as e:
-                logger.warning(f"Could not verify slam_toolbox: {e}")
-        
-        elif mission_type == 'patrol_laps':
-            # Map file requirement
-            map_path = os.path.expanduser("~/my_map.yaml")
             
-            if not os.path.exists(map_path):
+            logger.info("[MISSION VALIDATION] ✅ User confirmed SLAM running")
+
+        elif mission_type == 'patrol_laps':
+            # Check both container and host paths
+            container_map = "/workspace/my_map.yaml"
+            host_map = os.path.expanduser("~/my_map.yaml")
+            
+            map_exists = os.path.exists(container_map) or os.path.exists(host_map)
+            map_path = container_map if os.path.exists(container_map) else host_map
+
+            if not map_exists:
                 raise MissionRequirementsError(
                     f"Mission 'patrol_laps' requires a pre-built map at {map_path}. "
                     f"Map not found. Please run 'explore_area' mission first to create map, "
                     f"or create map manually using SLAM:\n"
-                    f"1. ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True\n"
-                    f"2. ros2 run turtlebot3_teleop teleop_keyboard\n"
-                    f"3. ros2 run nav2_map_server map_saver_cli -f ~/my_map"
+                    f"\n"
+                    f"HOST Terminal 1:\n"
+                    f"  ros2 launch slam_toolbox online_async_launch.py use_sim_time:=True\n"
+                    f"\n"
+                    f"HOST Terminal 2:\n"
+                    f"  ros2 run turtlebot3_teleop teleop_keyboard\n"
+                    f"  # Drive around for 60+ seconds\n"
+                    f"\n"
+                    f"HOST Terminal 3:\n"
+                    f"  ros2 run nav2_map_server map_saver_cli -f ~/my_map\n"
+                    f"\n"
+                    f"Then restart container with map mounted."
                 )
             
             logger.info(f"[MISSION VALIDATION] Map found: {map_path}")

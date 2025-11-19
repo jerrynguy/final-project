@@ -511,7 +511,7 @@ async def run_robot_control_loop(
                 await asyncio.sleep(0.5)
                 continue
             
-            iteration = 1
+            iteration += 1
             PerformanceLogger.log_iteration_start(iteration)
 
             # PRIORITY 0: ABORT NAV2 IF CRITICAL (NON-BLOCKING CHECK)
@@ -664,7 +664,7 @@ async def run_robot_control_loop(
                              )
                          )
                         logger.info("[NAV2] Continuous safety monitor started")
-                        
+
                         results["navigation_decisions"].append({
                             'action': 'nav2_goal',
                             'parameters': {'x': goal_x, 'y': goal_y, 'theta': goal_theta},
