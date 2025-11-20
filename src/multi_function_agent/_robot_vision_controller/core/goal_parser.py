@@ -65,44 +65,36 @@ async def parse_mission_from_prompt(user_prompt: str, builder) -> Mission:
         UnsupportedMissionError: If mission type is not recognized
     """
     try:
-        # Build system prompt with mission specifications
-        system_prompt = """You are a robot mission parser. Convert natural language commands into structured JSON.
-
-OUTPUT FORMAT (JSON only, no explanation):
-{
-  "type": "follow_target|patrol_laps|explore_area",
-  "target_class": "person|bottle|chair|cup|car|etc (COCO class names, null if not applicable)",
-  "parameters": {},
-  "description": "brief description"
-}
-
-MISSION TYPES:   
-1. follow_target: Track and follow a moving target (like a dog following owner)
-   Parameters: {"min_distance": float (meters), "max_distance": float, "predict_on_lost": bool}
-   
-2. patrol_laps: Complete N laps in pattern
-   Parameters: {"count": int, "shape": "circle|square|corridor"}
-   
-3. explore_area: General exploration with SLAM mapping
-   Parameters: {"duration": int (seconds), "coverage": "full|partial"}
-
-EXAMPLES:
-"Follow the person in front of you" → {"type":"follow_target","target_class":"person","parameters":{"min_distance":1.0,"max_distance":2.5,"predict_on_lost":true},"description":"Follow moving person"}
-
-"Go around 20 times" → {"type":"patrol_laps","target_class":null,"parameters":{"count":20,"shape":"circle"},"description":"Complete 20 circular laps"}
-
-"Explore freely" → {"type":"explore_area","target_class":null,"parameters":{"coverage":"full"},"description":"Free exploration"}
-
-IMPORTANT: If the command does not match any of these 3 mission types, return:
-{"type":"unsupported","target_class":null,"parameters":{},"description":"Mission type not recognized"}"""
+        # Load system prompt from file
+        from pathlib import Path
+        prompt_file = Path(__file__).parent / "text" / "mission_parser_prompt.txt"
+        
+        try:
+            with open(prompt_file, 'r') as f:
+                system_prompt = f.read().strip()
+        except FileNotFoundError:
+            logger.warning(f"Prompt file not found: {prompt_file}, using fallback")
+            # Fallback to minimal prompt if file missing
+            system_prompt = "You are a robot mission parser. Convert natural language to JSON with fields: type, target_class, parameters, description. Mission types: follow_target, patrol_laps, explore_area."
 
         user_message = f"Parse this command:\n{user_prompt}"
         
-        # Initialize LLM
+        # Get LLM config from builder (reuse workflow config)
+        try:
+            llm_config = builder._workflow_builder.general_config.llms.get('nim_llm')
+            model_name = llm_config.model_name if llm_config else "meta/llama-3.1-70b-instruct"
+            temperature = llm_config.temperature if llm_config else 0.0
+        except:
+            # Fallback if config not accessible
+            model_name = "meta/llama-3.1-70b-instruct"
+            temperature = 0.0
+            logger.warning("Using fallback LLM config")
+        
+        # Initialize LLM with config
         llm = ChatNVIDIA(
-            model="meta/llama-3.1-70b-instruct",
-            temperature=0.0,
-            max_tokens=100
+            model=model_name,
+            temperature=temperature,
+            max_tokens=100  # Keep short for mission parsing
         )
         
         # Prepare messages with system prompt

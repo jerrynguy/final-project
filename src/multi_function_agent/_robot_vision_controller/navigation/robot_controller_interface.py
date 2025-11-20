@@ -84,7 +84,7 @@ try:
         Nav2Interface,
         NavigationState
     )
-    from multi_function_agent._robot_vision_controller.core.ros2_node import get_ros2_node
+    from multi_function_agent._robot_vision_controller.core.ros2_node.ros2_node import get_ros2_node
     NAV2_AVAILABLE = True
 except ImportError:
     Nav2Interface = None

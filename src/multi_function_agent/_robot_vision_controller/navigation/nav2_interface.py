@@ -31,7 +31,7 @@ class Nav2Interface:
     """
     
     def __init__(self):
-        from multi_function_agent._robot_vision_controller.core.ros2_node import get_ros2_node
+        from multi_function_agent._robot_vision_controller.core.ros2_node.ros2_node import get_ros2_node
         self.bridge = get_ros2_node()
         self.state = NavigationState.IDLE
         logger.info("Nav2Interface initialized (daemon mode)")

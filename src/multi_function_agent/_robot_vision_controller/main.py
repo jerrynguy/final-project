@@ -27,8 +27,8 @@ except ImportError:
 from multi_function_agent._robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
 
 from multi_function_agent._robot_vision_controller.core.query_extractor import QueryExtractor
-from multi_function_agent._robot_vision_controller.core.ros2_node import get_ros2_node
-from multi_function_agent._robot_vision_controller.core.mission_controller import (
+from multi_function_agent._robot_vision_controller.core.ros2_node.ros2_node import get_ros2_node
+from multi_function_agent._robot_vision_controller.core.mission_controller.mission_controller import (
     MissionController,
     MissionRequirementsError
 )

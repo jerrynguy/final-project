@@ -38,10 +38,20 @@ multi_function_agent/
         ├── main.py                               # Entry point - ROS2 + SLAM integration
         ├── test_integration.py                   # Test the system
         ├── core/
+        |   ├── mission_controller/
+        |   |   ├── mission_validator/
+        |   |   |   └── mission_validator.py
+        |   |   ├── missions/
+        |   |   |   ├── base_mission.py
+        |   |   |   ├── explore_mission.py
+        |   |   |   ├── follow_mission.py
+        |   |   |   └── patrol_mission.py
+        |   |   └── mission_controller.py         # Mission state machine + requirements check
+        |   ├── ros2_node/
+        |   |   ├── ros2_node.py                  # Centralized ROS2 node
+        |   |   └── ros2_daemon_script.py             
         │   ├── query_extractor.py                # Prompt information extraction
         │   ├── goal_parser.py                    # LLM mission parser with validation
-        │   ├── mission_controller.py             # Mission state machine + requirements check
-        │   ├── ros2_node.py                      # Centralized ROS2 node
         │   └── models.py                         # AI model management
         ├── navigation/
         │   ├── nav2_interface.py                 # Nav2 Python interface
@@ -54,15 +64,16 @@ multi_function_agent/
         │   ├── spatial_detector.py               # LIDAR spatial analysis
         │   └── rtsp_stream_handler.py            # RTSP stream handler        
         └── utils/
+            ├── log/
+            │   ├── error_handlers.py             # Error logging
+            │   ├── output_formatter.py           # Output logging
+            │   └── performance_logger.py         # Performance logging
             ├── geometry_utils.py                 # Geometry calculation
             ├── movement_commands.py              # Commands to move
             ├── safety_checks.py                  # Safety First
             ├── ros_interface.py                  # ROS utilities
-            ├── ros2_stubs.py                     # ROS2 message stubs
-            └── log/
-                ├── error_handlers.py             # Error logging
-                ├── output_formatter.py           # Output logging
-                └── performance_logger.py         # Performance logging
+            └── ros2_stubs.py                     # ROS2 message stubs
+            
 
 docker/   
     ├── Dockerfile                                # NAT container with ROS2 packages
