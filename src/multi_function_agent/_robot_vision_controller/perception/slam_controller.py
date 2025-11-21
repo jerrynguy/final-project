@@ -104,12 +104,27 @@ class SLAMController:
             if save_dir:
                 os.makedirs(save_dir, exist_ok=True)
             
-            # Container cannot call ros2 command - instruct manual save
-            logger.warning("[SLAM] Map save requires manual action on HOST:")
-            logger.warning(f"  ros2 run nav2_map_server map_saver_cli -f {save_path}")
+            # Async save to avoid blocking control loop
+            import subprocess
+            import threading
             
-            # Simulate success to avoid breaking mission flow
-            logger.info("[SLAM] Auto-save skipped (manual save required)")
+            def _async_save():
+                try:
+                    result = subprocess.run(
+                        ['ros2', 'run', 'nav2_map_server', 'map_saver_cli', '-f', save_path],
+                        capture_output=True,
+                        timeout=2.0
+                    )
+                    if result.returncode == 0:
+                        logger.info(f"[SLAM] Map saved: {save_path}")
+                    else:
+                        logger.warning(f"[SLAM] Save warning: {result.stderr.decode()}")
+                except Exception as e:
+                    logger.error(f"[SLAM] Async save error: {e}")
+
+            save_thread = threading.Thread(target=_async_save, daemon=True)
+            save_thread.start()
+
             self.last_map_save = time.time()
             return True
                 
@@ -132,8 +147,9 @@ class SLAMController:
             bool: True if map was saved
         """
         current_time = time.time()
+        save_interval = 10.0
         
-        if force or (current_time - self.last_map_save) >= self.map_update_interval:
+        if force or (current_time - self.last_map_save) >= save_interval:
             return self.save_map()
         
         return False

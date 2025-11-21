@@ -333,18 +333,11 @@ class SpatialDetector:
             # Calculate clearances in each direction
             clearances = self._calculate_clearances_from_lidar(lidar_obstacles)
             logger.info(f"[DEBUG] Clearances: {clearances}")
-            
-            # ADAPTIVE THRESHOLD: Use lower threshold if all clearances are moderate
-            max_clearance = max(clearances.values()) if clearances else 0
-            logger.info(f"[DEBUG] Max clearance: {max_clearance:.2f}m")
-            
-            if max_clearance < self.safe_distance_threshold:
-                adaptive_threshold = self.lidar_critical_distance * 1.5  # 0.45m
-                logger.warning(f"[ADAPTIVE] Using relaxed threshold {adaptive_threshold:.2f}m (max_clearance={max_clearance:.2f}m < safe={self.safe_distance_threshold:.2f}m)")
-            else:
-                adaptive_threshold = self.safe_distance_threshold  # 1.0m
-                logger.info(f"[ADAPTIVE] Using normal threshold {adaptive_threshold:.2f}m")
-            
+
+            # FIXED THRESHOLD: Always use safe_distance (1.0m)
+            adaptive_threshold = self.safe_distance_threshold  # Always 1.0m
+            logger.info(f"[THRESHOLD] Using fixed threshold {adaptive_threshold:.2f}m")
+
             # Nav2 handles direction finding - just use default
             safe_directions = []  # Not used anymore
             recommended_direction = 'forward'  # Default - Nav2 decides

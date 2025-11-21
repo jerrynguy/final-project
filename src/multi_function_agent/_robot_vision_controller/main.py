@@ -630,11 +630,11 @@ async def run_robot_control_loop(
 
             if slam_controller and slam_controller.is_running:
                 current_time = time.time()
-                if current_time - last_slam_save >= 5.0:  # Save every 5s
+                if current_time - last_slam_save >= 10.0:  # Save every 10s
                     saved = slam_controller.auto_save_map()
                     if saved:
                         last_slam_save = current_time
-                        logger.info("[SLAM] Map auto-saved")
+                        logger.debug("[SLAM] Map save initiated (async)")
             
             # Check for mission completion
             if mission_result['completed']:
@@ -743,37 +743,35 @@ async def run_robot_control_loop(
                 results["navigation_decisions"].append(navigation_decision)
                 
                 # ============================================================
-                # PRIORITY 5b: EXECUTE MANUAL COMMAND (BLOCKING with ABORT)
+                # PRIORITY 5b: PRE-EXECUTION SAFETY CHECK
                 # ============================================================
+                # Only check CRITICAL distance (mode-specific)
                 
                 # Final safety check with FRESH lidar data
+                critical_threshold = (
+                    safety_monitor.CRITICAL_DISTANCE
+                    if hasattr(safety_monitor, 'CRITICAL_DISTANCE') 
+                    else 0.4 # Default
+                )
                 if lidar_snapshot is not None:
                     min_dist = safety_monitor.get_min_distance(lidar_snapshot)
                     
-                    if min_dist < safety_monitor.CRITICAL_DISTANCE:
+                    if min_dist < critical_threshold:
                         PerformanceLogger.log_safety_abort(min_dist, navigation_decision['action'])
                         
                         navigation_decision = {
                             "action": "stop",
-                            "parameters": {"linear_velocity": 0.0, "angular_velocity": 0.0, "duration": 0.1},
+                            "parameters": {
+                                "linear_velocity": 0.0, 
+                                "angular_velocity": 0.0, 
+                                "duration": 0.05
+                            },
                             "reason": f"pre_execution_abort_{min_dist:.2f}m",
                         }
                         
                         await robot_interface.execute_command(navigation_decision)
                         continue
-                    
-                    elif min_dist < safety_monitor.WARNING_DISTANCE:
-                        PerformanceLogger.log_safety_warning(min_dist)
-                        
-                        # Scale down velocity
-                        params = navigation_decision.get('parameters', {})
-                        scale = (min_dist - safety_monitor.CRITICAL_DISTANCE) / \
-                                (safety_monitor.WARNING_DISTANCE - safety_monitor.CRITICAL_DISTANCE)
-                        scale = max(0.3, min(1.0, scale))
-                        
-                        params['linear_velocity'] = params.get('linear_velocity', 0.0) * scale
-                        params['angular_velocity'] = params.get('angular_velocity', 0.0) * scale
-                        navigation_decision['parameters'] = params
+
                 else:
                     logger.warning("[PRE-EXECUTION] No LIDAR data, forcing STOP")
                     navigation_decision = {

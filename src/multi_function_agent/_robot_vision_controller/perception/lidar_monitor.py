@@ -22,11 +22,21 @@ class LidarSafetyMonitor:
     Real-time collision avoidance using raw LiDAR data.
     """
     
-    def __init__(self):
+    def __init__(self, mode: str = 'explore'):
         """Initialize LiDAR safety monitor with safety thresholds."""
         self.safety_validator = SafetyValidator()
-        self.CRITICAL_DISTANCE = self.safety_validator.CRITICAL_DISTANCE
-        self.WARNING_DISTANCE = self.safety_validator.WARNING_DISTANCE
+        self.mode = mode
+
+        # EMERGENCY LAYER
+        self.CRITICAL_DISTANCE = self.safety_validator.EMERGENCY_DISTANCE
+        if mode == 'explore':
+            self.WARNING_DISTANCE = self.safety_validator.CRITICAL_DISTANCE_EXPLORE
+        elif mode == 'patrol':
+            self.WARNING_DISTANCE = self.safety_validator.CRITICAL_DISTANCE_PATROL
+        else:
+            self.WARNING_DISTANCE = 0.35
+
+        self.CAUTION_DISTANCE = self.safety_validator.CAUTION_DISTANCE
     
     def check_safety(self, lidar_data) -> Dict:
         """
@@ -65,16 +75,12 @@ class LidarSafetyMonitor:
             # CRITICAL: Immediate collision risk
             if min_distance < self.CRITICAL_DISTANCE:
                 escape_command = self._generate_escape_command(threat_angle, min_distance)
-                logger.warning(f"[SAFETY VETO] Collision risk at {min_distance:.2f}m")
+                logger.error(f"[EMERGENCY VETO] Collision imminent at {min_distance:.2f}m")
                 return {
                     'veto': True,
                     'command': escape_command,
-                    'reason': f'collision_risk_{min_distance:.2f}m'
+                    'reason': f'emergency_{min_distance:.2f}m'
                 }
-            
-            # WARNING: Close but not critical
-            if min_distance < self.WARNING_DISTANCE:
-                logger.debug(f"[SAFETY WARNING] Close obstacle at {min_distance:.2f}m")
             
             return {'veto': False, 'command': None, 'reason': 'safe'}
             

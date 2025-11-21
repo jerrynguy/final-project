@@ -448,7 +448,12 @@ class RobotControllerInterface(Node):
             iterations = int(duration / interval)
             
             from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
-            safety_monitor = LidarSafetyMonitor()
+            mode = 'explore'
+            safety_monitor = LidarSafetyMonitor(mode=mode)
+
+            # Cache original velocities
+            original_linear = twist.linear.x
+            original_angular = twist.angular.z
             
             for i in range(max(1, iterations)):
                 if self.lidar_data is not None:
@@ -468,20 +473,36 @@ class RobotControllerInterface(Node):
                     elif min_dist < safety_monitor.WARNING_DISTANCE:
                         scale = (min_dist - safety_monitor.CRITICAL_DISTANCE) / \
                                 (safety_monitor.WARNING_DISTANCE - safety_monitor.CRITICAL_DISTANCE)
-                        scale = max(0.2, min(1.0, scale))
+                        scale = max(0.3, min(0.6, scale))
                         
                         logger.warning(
-                            f"[SPEED REDUCTION] Obstacle at {min_dist:.2f}m, "
+                            f"[CRITICAL ZONE] Obstacle at {min_dist:.2f}m, "
                             f"scaling to {scale*100:.0f}%"
                         )
                         
                         # ✅ THAY ĐỔI: Dùng ros_node
-                        scaled_linear = twist.linear.x * scale * 0.5
-                        scaled_angular = twist.angular.z * scale
+                        scaled_linear = original_linear * scale
+                        scaled_angular = original_angular * scale
+                        self.ros_node.publish_velocity(scaled_linear, scaled_angular)
+                        
+                    # CAUTION: 0.4-0.7m - Gentle reduction
+                    elif min_dist < safety_monitor.CAUTION_DISTANCE:
+                        # Gentle reduction: 60-100% speed
+                        scale = (min_dist - safety_monitor.WARNING_DISTANCE) / \
+                                (safety_monitor.CAUTION_DISTANCE - safety_monitor.WARNING_DISTANCE)
+                        scale = max(0.6, min(1.0, scale))
+                        
+                        logger.debug(
+                            f"[CAUTION ZONE] Obstacle at {min_dist:.2f}m, "
+                            f"scaling to {scale*100:.0f}%"
+                        )
+                        
+                        scaled_linear = original_linear * scale
+                        scaled_angular = original_angular * scale
                         self.ros_node.publish_velocity(scaled_linear, scaled_angular)
                     else:
                         # ✅ THAY ĐỔI: Dùng ros_node
-                        self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
+                        self.ros_node.publish_velocity(original_linear, original_angular)
                 else:
                     # ✅ THAY ĐỔI: Dùng ros_node
                     self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)

@@ -380,11 +380,11 @@ class NavigationReasoner:
             return {
                 'action': 'move_forward',
                 'parameters': {
-                    'linear_velocity': boosted_speed * 0.7,
-                    'angular_velocity': 0.15,  # Slight sweep for SLAM coverage
-                    'duration': 1.5
+                    'linear_velocity': boosted_speed * 0.75,
+                    'angular_velocity': 0.4,  # Slight sweep for SLAM coverage
+                    'duration': 2
                 },
-                'confidence': 0.8,
+                'confidence': 0.85,
                 'reason': 'slam_exploration'
             }
         

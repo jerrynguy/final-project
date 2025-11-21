@@ -83,11 +83,3 @@ class PerformanceLogger:
             f"[PRE-EXECUTION ABORT] Obstacle at {min_distance:.2f}m! "
             f"Rejecting command: {action}"
         )
-    
-    @staticmethod
-    def log_safety_warning(min_distance: float) -> None:
-        """Log pre-execution safety warning."""
-        logger.warning(
-            f"[PRE-EXECUTION WARNING] Close obstacle at {min_distance:.2f}m, "
-            f"reducing speed"
-        )
