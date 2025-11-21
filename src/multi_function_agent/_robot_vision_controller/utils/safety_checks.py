@@ -54,6 +54,18 @@ class SafetyValidator:
         # Statistics tracking
         self.total_checks = 0
         self.unsafe_detections = 0
+
+    @property
+    def CRITICAL_DISTANCE(self):
+        return self.CRITICAL_DISTANCE_EXPLORE  # Default to explore
+
+    @property  
+    def WARNING_DISTANCE(self):
+        return self.CAUTION_DISTANCE
+
+    @property
+    def SAFE_DISTANCE(self):
+        return self.AWARE_DISTANCE
     
     def validate_movement_command(self, movement_decision: Dict[str, Any]) -> bool:
         """
