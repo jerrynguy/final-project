@@ -178,7 +178,7 @@ flowchart TD
 classDef ros2 fill:#cce5ff,stroke:#3399ff,stroke-width:1px,color:#333;
 classDef nat fill:#d4edda,stroke:#28a745,stroke-width:1px,color:#333;
 classDef ai fill:#fff3cd,stroke:#ffc107,stroke-width:1px,color:#333;
-classDef edge fill:none,stroke:#555,stroke-width:1px,color:#333;
+classDef edge fill:#e88010,stroke:#555,stroke-width:1px,color:#333;
 
 %% Subgraph Host Machine
 subgraph Host["HOST MACHINE"]
