@@ -175,13 +175,15 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 ```mermaid
 flowchart TD
 
+%% Subgraph ROS2
 subgraph Host["HOST MACHINE"]
     ROS2Node["ROS2 Humble (Native)"]
     ROS2Node --> A1["Gazebo + Nav2 + SLAM Toolbox + TurtleBot3"]
-    ROS2Node --> A2["Topics: /cmd_vel, /scan, /odom, /map"]
-    ROS2Node --> A3["Cyclone DDS (RMW)"]
+    ROS2Node --> A2["Topics /cmd_vel, /scan, /odom, /map"]
+    ROS2Node --> A3["Cyclone DDS RMW"]
 end
 
+%% Subgraph NAT
 NATNode["NAT Container (nvidia-nat)"]
 NATNode --> B1["Python 3.11 venv (NAT Agent)"]
 NATNode --> B2["System Python 3.10 (rclpy + SLAM subprocess)"]
@@ -190,7 +192,8 @@ NATNode --> B4["perception/slam_controller.py (SLAM Manager)"]
 NATNode --> B5["Persistent daemon for sensor streaming"]
 NATNode --> B6["AI Agent + YOLO + Mission Controller"]
 
-ROS2Node -->| "ROS2 DDS Network (Cyclone DDS)" | NATNode
+%% Kết nối ROS2 → NAT
+ROS2Node --> NATNode
 
 
 
