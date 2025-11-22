@@ -4,13 +4,15 @@ Hệ thống điều khiển robot TurtleBot3 tự động với AI Agent thông
 
 ## 🤖 AI Models Used
 
-|         Model           |                     Purpose                        |        When Used        | Critical |
-|-------------------------|----------------------------------------------------|-------------------------|----------|
-| **LLM (Llama 3.1 70B)** | Parse natural language prompt → structured mission |       1x at startup     |  ✅ Yes  |
-|    **YOLO (v11n)**      |            Object detection & tracking             | Continuous (2Hz cached) |  ✅ Yes  |
+|         Model           |                     Purpose                        |        When Used        |   Critical   |
+|-------------------------|----------------------------------------------------|-------------------------|--------------|
+| **LLM (Llama 3.1 70B)** | Parse natural language prompt → structured mission |       1x at startup     |    ✅ Yes    |
+| **LLM (Llama 3.2 3B)**  | AI-powered stuck recovery in explore mode          | On-demand (when stuck)  |  ⚠️ Optional |
+|    **YOLO (v11n)**      |            Object detection & tracking             | Continuous (2Hz cached) |    ✅ Yes    |
 
 **Performance:**
 - 🚀 Real-time navigation: <100ms per iteration
+- 🤖 AI recovery: ~60-100ms (only when stuck)
 - 💾 Memory usage: ~0.5GB (YOLO only)
 - ⚡ Startup time: ~1 second
 - 🗺️ SLAM mapping: Auto-save every 5s
@@ -23,9 +25,6 @@ Hệ thống điều khiển robot TurtleBot3 tự động với AI Agent thông
 - [Kiến trúc Native ROS2](#kiến-trúc-native-ros2)
 - [Mission Types](#mission-types)
 - [Mission Requirements](#mission-requirements)
-- [Cài đặt](#cài-đặt)
-- [Cách chạy](#cách-chạy)
-- [Troubleshooting](#troubleshooting)
 
 ## 📁 Cấu trúc thư mục
 
@@ -40,16 +39,16 @@ multi_function_agent/
         ├── core/
         |   ├── mission_controller/
         |   |   ├── mission_validator/
-        |   |   |   └── mission_validator.py
+        |   |   |   └── mission_validator.py      # Mission requirements validation
         |   |   ├── missions/
-        |   |   |   ├── base_mission.py
-        |   |   |   ├── explore_mission.py
-        |   |   |   ├── follow_mission.py
-        |   |   |   └── patrol_mission.py
+        |   |   |   ├── base_mission.py           # Abstract base class for missions
+        |   |   |   ├── explore_mission.py        # Explore area mission (SLAM)
+        |   |   |   ├── follow_mission.py         # Follow target mission
+        |   |   |   └── patrol_mission.py         # Patrol laps mission
         |   |   └── mission_controller.py         # Mission state machine + requirements check
         |   ├── ros2_node/
         |   |   ├── ros2_node.py                  # Centralized ROS2 node
-        |   |   └── ros2_daemon_script.py             
+        |   |   └── ros2_daemon_script.py         # Persistent daemon subprocess 
         │   ├── query_extractor.py                # Prompt information extraction
         │   ├── goal_parser.py                    # LLM mission parser with validation
         │   └── models.py                         # AI model management
@@ -132,6 +131,10 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 │    - Natural language → Mission structure   │
 │    - Mission validation & requirements      │
 │    - 1x at startup only                     │
+│  • AI Recovery Agent (Llama 3.2 3B)         │
+│    - Stuck detection & intelligent escape   │
+│    - Explore mode only                      │
+│    - On-demand (~1-3 times per mission)     │
 │  • YOLO Object Detection (v11n)             │
 │    - 80 COCO classes                        │
 │    - 2Hz cached inference                   │
@@ -139,7 +142,7 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 │    - State machine for mission tracking     │
 │    - Mission requirements validation        │
 │    - Progress monitoring                    │
-│  • SLAM Controller (NEW!)                   │
+│  • SLAM Controller                          │
 │    - Autonomous map generation              │
 │    - Subprocess lifecycle management        │
 │    - Auto-save + quality validation         │
@@ -162,6 +165,7 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 - Cyclone DDS for stable discovery
 - YOLO-only pipeline (BLIP2 removed)
 - **Autonomous SLAM mapping** - no manual intervention
+- **AI-powered stuck recovery** - intelligent escape planning
 - Mission-driven autonomous behavior with validation
 
 ---
@@ -230,17 +234,19 @@ Robot hỗ trợ 3 loại nhiệm vụ thông qua natural language với **progr
 ```
 
 **Requirements:** ✅ SLAM Toolbox installed  
-**Navigation:** Manual exploration với SLAM-optimized movements  
+**Navigation:** AI-assisted exploration với automatic stuck recovery  
 **Behavior:** 
 - Tự động tạo map trong quá trình explore
 - Auto-save map mỗi 5 giây
 - Wide sweeping motions để cover nhiều area
 - Map validation khi hoàn thành
+- AI Recovery Agent tự động escape khi bị stuck
 
 **Output:** 
 - Map saved tại `~/my_map.yaml` và `~/my_map.pgm`
 - Coverage statistics
 - Mapping duration
+- AI Recovery statistics (if triggered)
 
 **⚠️ Important:** Đây là mission bắt buộc chạy đầu tiên để tạo map cho Patrol!
 
@@ -349,289 +355,6 @@ Error: "Target class required. Example: 'Follow the person'"
 
 ---
 
-## 🔧 Cài đặt
-
-### **Bước 1: Cài đặt ROS2 Humble (Host)**
-
-```bash
-# Add ROS2 repository
-sudo apt update && sudo apt install -y software-properties-common curl
-sudo add-apt-repository universe
-curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
-    -o /usr/share/keyrings/ros-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu jammy main" \
-    | sudo tee /etc/apt/sources.list.d/ros2.list
-
-# Install ROS2 Humble Desktop + Nav2 + TurtleBot3 + SLAM Toolbox
-sudo apt update
-sudo apt install -y \
-    ros-humble-desktop \
-    ros-humble-navigation2 \
-    ros-humble-nav2-bringup \
-    ros-humble-turtlebot3* \
-    ros-humble-slam-toolbox \
-    ros-humble-rmw-cyclonedds-cpp
-
-# Setup environment (IMPORTANT!)
-echo "export ROS_DOMAIN_ID=0" >> ~/.bashrc
-echo "export TURTLEBOT3_MODEL=burger" >> ~/.bashrc
-echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ~/.bashrc
-source ~/.bashrc
-```
-
-### **Bước 2: Verify SLAM Toolbox**
-
-```bash
-# Check SLAM Toolbox installed
-ros2 pkg list | grep slam_toolbox
-# Should output: slam_toolbox
-
-# Test SLAM launch file exists
-ros2 launch slam_toolbox online_async_launch.py --show-args
-# Should show launch arguments
-```
-
-### **Bước 3: Cài đặt Docker**
-
-```bash
-# Install Docker Engine
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-
-# Add user to docker group
-sudo usermod -aG docker $USER
-newgrp docker
-```
-
-### **Bước 4: Clone Repository**
-
-```bash
-cd ~
-git clone https://github.com/jerrynguy/final-project.git nemo-agent-toolkit
-cd nemo-agent-toolkit
-```
-
-### **Bước 5: Build Docker Container**
-
-```bash
-cd ~/nemo-agent-toolkit/docker
-./build_container.sh
-```
-
-**Note:** Dockerfile đã include Cyclone DDS và ROS2 packages. Build time: ~5-10 phút.
-
----
-
-## 🚀 Cách chạy
-
-### **Bước 1: Start ROS2 Environment (Host)**
-
-```bash
-# Function to run command in new terminal
-run_in_terminal() {
-    gnome-terminal -- bash -c "$1; exec bash"
-}
-
-echo "Starting robot stack..."
-
-# Start Gazebo
-run_in_terminal "cd ~ && ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py"
-
-sleep 5
-
-# Start Nav2 (for patrol missions - map will be loaded automatically)
-run_in_terminal "cd ~ && ros2 launch turtlebot3_navigation2 navigation2.launch.py use_sim_time:=True map:=$HOME/my_map.yaml"
-
-sleep 3
-
-# Start MediaMTX
-run_in_terminal "cd ~ && ./mediamtx"
-
-sleep 2  
-
-# Start RTSP publisher
-run_in_terminal "cd ~/turtlebot3_ws/src/custom_controller/custom_controller && python3 rtsp_publisher.py"
-
-sleep 2
-
-# Run ffplay (optional - for monitoring)
-run_in_terminal "cd ~ && ffplay rtsp://127.0.0.1:8554/robotcam"
-
-echo "All services started!"
-echo "You can now run your AI agent in this terminal:"
-echo "cd ~/nemo-agent-toolkit && source .venv/bin/activate"
-```
-
-**⚠️ Note:** Nav2 sẽ báo lỗi nếu `~/my_map.yaml` chưa tồn tại - đây là bình thường, chạy Explore mission trước!
-
-### **Bước 2: Run NAT Container**
-
-```bash
-cd ~/nemo-agent-toolkit/docker
-
-# Create named volumes (chỉ chạy 1 lần)
-docker volume create nat_models 2>/dev/null || true
-docker volume create nat_ros2 2>/dev/null || true
-
-# Run container với hybrid mounts
-docker run -it --rm \
-    --network=host \
-    --name nat_container \
-    -e ROS_DOMAIN_ID=0 \
-    -e RTSP_URL="${RTSP_URL:-rtsp://host.docker.internal:8554/robotcam}" \
-    -e NVIDIA_API_KEY="${NVIDIA_API_KEY:-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}" \
-    -e NGC_API_KEY="${NGC_API_KEY:-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}" \
-    -v ~/nemo-agent-toolkit/examples/multi_function_agent:/workspace/mounted_code:rw \
-    -v nat_models:/workspace/persistent_data/models:rw \
-    -v nat_ros2:/workspace/persistent_data/ros2_packages:ro \
-    nvidia-nat:v1.2.1 \
-    "${@:-bash}"
-
-# Usage examples:
-# root@dung-HP-ZBook-Firefly-15-6-inch-G8-Mobile-Workstation-PC:/workspace/mounted_code# python3 /workspace/mounted_code/src/multi_function_agent/robot_vision_controller/test_integration.py
-# ./run_hybrid_container.sh  # Interactive bash
-# ./run_hybrid_container.sh "nat run --config_file /workspace/mounted_code/src/multi_function_agent/configs/config.yml --input 'Navigate to (2.0, 3.0)'"
-# ./run_hybrid_container.sh "nat run --config_file /workspace/mounted_code/src/multi_function_agent/configs/config.yml --input 'Explore the area for 60 seconds'"
-```
-
----
-
-## 🔧 Troubleshooting
-
-### **Problem: SLAM không start**
-
-**Symptoms:**
-```
-[SLAM] Failed to start:
-slam_toolbox: command not found
-```
-
-**Solution:**
-```bash
-# Check SLAM installed
-ros2 pkg list | grep slam_toolbox
-
-# If not found, install
-sudo apt install ros-humble-slam-toolbox
-
-# Verify
-ros2 launch slam_toolbox online_async_launch.py --show-args
-```
-
----
-
-### **Problem: Map không được tạo sau explore**
-
-**Symptoms:**
-```
-[SLAM] Map saved: False
-Map files not created
-```
-
-**Check:**
-```bash
-# Verify SLAM process running
-ps aux | grep slam_toolbox
-
-# Check map_saver_cli available
-ros2 run nav2_map_server map_saver_cli --help
-
-# Check write permissions
-ls -ld ~
-```
-
-**Solution:**
-```bash
-# Ensure nav2_map_server installed
-sudo apt install ros-humble-nav2-map-server
-
-# Test manual save
-ros2 run nav2_map_server map_saver_cli -f ~/test_map
-```
-
----
-
-### **Problem: Patrol reject map dù đã có file**
-
-**Symptoms:**
-```
-❌ Map not found at ~/my_map.yaml
-```
-
-**Check:**
-```bash
-# Verify file exists
-ls -lh ~/my_map.yaml ~/my_map.pgm
-
-# Check file sizes (should be >100B YAML, >1KB PGM)
-du -h ~/my_map.*
-```
-
-**Solution:**
-```bash
-# If files too small, re-run explore with longer duration
-nat run --input "Explore for 90 seconds"
-```
-
----
-
-### **Problem: LIDAR/Odom trả về None**
-
-**Check ROS2 environment variables:**
-```bash
-# On host
-echo $ROS_DOMAIN_ID  # Should be 0
-echo $RMW_IMPLEMENTATION  # Should be rmw_cyclonedds_cpp
-
-# Inside container
-echo $ROS_DOMAIN_ID  # Should be 0
-```
-
-**Verify topics visible:**
-```bash
-# Inside container
-source /opt/ros/humble/setup.bash
-ros2 topic list | grep -E "(scan|odom)"
-```
-
-**Solution:** Ensure matching `ROS_DOMAIN_ID` và `RMW_IMPLEMENTATION` on both host and container.
-
----
-
-### **Problem: Nav2 không nhận goal**
-
-**Check Nav2 status:**
-```bash
-ros2 node list | grep bt_navigator
-ros2 action list | grep navigate
-```
-
-**Solution:** Set initial pose in RViz (REQUIRED!):
-1. Open RViz
-2. Click "2D Pose Estimate" tool
-3. Click on robot's position on map
-4. Drag to set orientation
-
----
-
-### **Problem: Container không connect ROS2**
-
-**Verify host network mode:**
-```bash
-docker inspect nat_container | grep NetworkMode
-# Should be "host"
-```
-
-**Check Cyclone DDS installed:**
-```bash
-# Inside container
-dpkg -l | grep cyclonedds
-```
-
-**Solution:** Rebuild Docker image nếu thiếu Cyclone DDS.
-
----
-
 ## 📝 Ghi chú quan trọng
 
 ### **SLAM Integration**
@@ -691,12 +414,14 @@ dpkg -l | grep cyclonedds
 - **SLAM Quality**: Depends on exploration duration (recommend 60s+ for good maps)
 - **Map Size**: Larger environments require longer explore duration
 - **Host Network Required**: Container must use host network mode for ROS2 DDS
+- **AI Recovery**: Only available in explore mode (not follow/patrol)
+- **LLM Latency**: AI recovery adds ~60-100ms when stuck detected
 
 **Known Issues:**
 - SLAM may produce incomplete maps if exploration too short (<30s)
 - Nav2 requires manual initial pose estimate in RViz
 - Map overwrite warning: Re-running explore will overwrite existing map
-
+- AI Recovery may occasionally fail to parse LLM response (uses fallback)
 ---
 
 ## 📚 References

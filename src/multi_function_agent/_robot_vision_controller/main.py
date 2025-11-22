@@ -15,6 +15,8 @@ from multi_function_agent._robot_vision_controller.perception.lidar_monitor impo
 from multi_function_agent._robot_vision_controller.perception.rtsp_stream_handler import RTSPStreamHandler
 from multi_function_agent._robot_vision_controller.perception.robot_vision_analyzer import RobotVisionAnalyzer
 
+from multi_function_agent._robot_vision_controller.navigation.stuck_detector import StuckDetector
+from multi_function_agent._robot_vision_controller.navigation.ai_recovery_agent import AIRecoveryAgent
 from multi_function_agent._robot_vision_controller.navigation.navigation_reasoner import NavigationReasoner
 from multi_function_agent._robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
 try:
@@ -120,6 +122,13 @@ async def _robot_vision_controller(
         robot_interface = RobotControllerInterface()
         vision_analyzer = RobotVisionAnalyzer(robot_controller=robot_interface)
         safety_monitor = LidarSafetyMonitor()
+        stuck_detector = StuckDetector(
+            window_size=3,
+            displacement_threshold=0.05
+        )
+        ai_recovery_agent = AIRecoveryAgent()
+
+        logger.info("✅ AI Recovery system initialized for explore mode")
 
         nav2_ready = False
         if robot_interface.use_nav2:
@@ -200,6 +209,8 @@ async def _robot_vision_controller(
             safety_validator,
             safety_monitor,
             mission_controller,
+            stuck_detector,
+            ai_recovery_agent, 
             slam_controller=slam_controller,
             nav2_ready=nav2_ready,
             max_iterations=None,
@@ -371,6 +382,8 @@ async def run_robot_control_loop(
     safety_validator: SafetyValidator,
     safety_monitor: LidarSafetyMonitor,
     mission_controller: MissionController, 
+    stuck_detector: StuckDetector,
+    ai_recovery_agent: AIRecoveryAgent, 
     slam_controller: Optional[SLAMController] = None,
     nav2_ready: bool = False,
     max_iterations: int = None,
@@ -431,6 +444,65 @@ async def run_robot_control_loop(
                 results["commands_sent"].append(safety_result['command'])
                 await asyncio.sleep(0.05)
                 continue
+
+            # Stuck detection and ai recovery
+            if mission_controller.mission.type == 'explore_area':
+                robot_pos = robot_interface.ros_node.get_robot_pose()
+                if robot_pos:
+                    #Get last action
+                    last_action = (
+                        results["navigation_decisions"][-1].get('action','unknown')
+                        if results["navigation_decisions"] else 'unknown'
+                    )
+
+                    # Check if stuck
+                    is_stuck = stuck_detector.update(robot_pos, last_action)
+
+                    if is_stuck:
+                        logger.warning("[STUCK] Robot appears to be stuck, invoking AI recovery")
+
+                        # Get recent action history
+                        recent_actions = [
+                            d.get('action','unknown') for d in results["navigation_decisions"][-5:]
+                        ]
+
+                        # Generate AI escape command
+                        try:
+                            escape_command = await ai_recovery_agent.generate_escape_command(
+                                vision_context = vision_analysis,
+                                last_actions= recent_actions,
+                                stuck_reason="position_not_changing"
+                            )
+
+                            logger.info(f"[AI RECOVERY] Executing escape command: {escape_command}")
+
+                            # Convert to navigation decision format
+                            navigation_decision = {
+                                'action': escape_command['action'],
+                                'parameters': {
+                                    'linear_velocity': escape_command['linear'],
+                                    'angular_velocity': escape_command['angular'],
+                                    'duration': escape_command['duration']
+                                },
+                                'confidence': 0.95,
+                                'reason': f"ai_recovery_{escape_command['reason']}"
+                            }
+
+                            command_success = await robot_interface.execute_command(navigation_decision)
+
+                            if command_success:
+                                results["navigation_decisions"].append(navigation_decision)
+                                results["commands_sent"].append(navigation_decision)
+
+                                # Reset stuck detector after successful recovery
+                                stuck_detector.reset()
+                                logger.info("✅ [AI RECOVERY] Escape executed, resuming exploration")
+
+                            await asyncio.sleep(0.1)
+                            continue
+                        except Exception as e:
+                            logger.error(f"[AI RECOVERY] Failed to generate/execute escape command: {e}")
+                            # Proceed with normal navigation if recovery fails
 
             # Vision analysis (cached at 2Hz)
             current_time = time.time()
@@ -497,6 +569,22 @@ async def run_robot_control_loop(
                 
                 if slam_controller and slam_controller.is_running:
                     slam_controller.save_map()
+
+                # Log AI recovery stats
+                if ai_recovery_agent.total_invocations > 0:
+                    stats = ai_recovery_agent.get_stats()
+                    logger.info(
+                        f"[AI RECOVERY] Invoked {ai_recovery_agent.total_invocations} times, "
+                        f"Success rate: {stats['parse_success_rate']:.1%}, "
+                        f"Avg latency: {stats['avg_inference_time_ms']:.0f}ms"
+                    )
+                
+                stuck_stats = stuck_detector.get_stats()
+                logger.info(
+                    f"Total checks: {stuck_stats['total_checks']}, "
+                    f"Stuck events: {stuck_stats['stuck_events']}, "
+                    f"Stuck rate: {stuck_stats['stuck_rate']:.1%}"
+                )
                 
                 results["final_status"] = "mission_completed"
                 break
