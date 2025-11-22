@@ -170,9 +170,20 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 
 ---
 
-## 🏗️ Architecture Diagram 
+## 🏗️ Kiến trúc Native ROS2
 
-```mermaid
+### **Python Version Challenge**
+- **NAT Agent:** Requires Python 3.11+
+- **ROS2 Humble:** Supports Python 3.10 only
+- **SLAM Toolbox:** System Python 3.10 subprocess
+- **Solution:** Subprocess wrapper - Python 3.11 venv calls system Python 3.10 (rclpy + SLAM)
+
+### **Communication Architecture**
+
+![Workflow Diagram](src/multi_function_agent/_robot_vision_controller/images/nat_container.png)
+
+```
+mermaid
 flowchart TD
 %% Class definitions for colors
 classDef ros2 fill:#cce5ff,stroke:#3399ff,stroke-width:1px,color:#333;
@@ -209,46 +220,6 @@ DDS["ROS2 DDS Network (Cyclone DDS)"]
 class DDS ros2
 ROS2Node --> DDS --> NATNode
 class DDS edge
-
-```
-
-## 🏗️ Kiến trúc Native ROS2
-
-### **Python Version Challenge**
-- **NAT Agent:** Requires Python 3.11+
-- **ROS2 Humble:** Supports Python 3.10 only
-- **SLAM Toolbox:** System Python 3.10 subprocess
-- **Solution:** Subprocess wrapper - Python 3.11 venv calls system Python 3.10 (rclpy + SLAM)
-
-### **Communication Architecture**
-
-![Workflow Diagram](src/multi_function_agent/_robot_vision_controller/images/nat_container.png)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    HOST MACHINE                             │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │   ROS2 Humble (Native)                              │    │
-│  │   - Gazebo + Nav2 + SLAM Toolbox + TurtleBot3       │    │
-│  │   - Topics: /cmd_vel, /scan, /odom, /map            │    │
-│  │   - Cyclone DDS (RMW)                               │    │
-│  └──────────────────┬──────────────────────────────────┘    │
-│                     │                                       │
-│                     │ ROS2 DDS Network (Cyclone DDS)        │
-│                     │ (Host Network Mode)                   │
-│                     │                                       │
-│  ┌──────────────────▼──────────────────────────────────┐    │
-│  │   NAT Container (nvidia-nat)                        │    │
-│  │   - Python 3.11 venv (NAT Agent)                    │    │
-│  │   - System Python 3.10 (rclpy + SLAM subprocess)    │    │
-│  │   - core/ros2_node.py (Subprocess Bridge)           │    │
-│  │   - perception/slam_controller.py (SLAM Manager)    │    │
-│  │   - Persistent daemon for sensor streaming          │    │
-│  │   - AI Agent + YOLO + Mission Controller            │    │
-│  └─────────────────────────────────────────────────────┘    │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
 ```
 
 **Communication Flow:**
