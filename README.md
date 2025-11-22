@@ -182,8 +182,7 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 
 ![Workflow Diagram](src/multi_function_agent/_robot_vision_controller/images/nat_container.png)
 
-```
-mermaid
+```mermaid
 flowchart TD
 %% Class definitions for colors
 classDef ros2 fill:#cce5ff,stroke:#3399ff,stroke-width:1px,color:#333;
