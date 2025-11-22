@@ -245,11 +245,6 @@ class SpatialDetector:
             elif position == 'right':
                 clearances['right'] = min(clearances['right'], distance)
         
-        logger.debug(
-            f"[CLEARANCE] forward={clearances['forward']:.2f}m, "
-            f"left={clearances['left']:.2f}m, right={clearances['right']:.2f}m"
-        )
-        
         return clearances
     
     def _calculate_safety_score_from_obstacles(self, obstacles: List[Dict]) -> int:
@@ -272,11 +267,6 @@ class SpatialDetector:
         
         # Clamp to [0, 10]
         final_score = max(0, min(10, base_score))
-        
-        logger.debug(
-            f"[SAFETY] Score={final_score}/10 "
-            f"(high={high_threats}, med={medium_threats}, low={low_threats})"
-        )
         
         return final_score
     
@@ -316,23 +306,17 @@ class SpatialDetector:
         """
         Execute fast spatial analysis using LiDAR data.
         """
-        try:
-            logger.info("=" * 60)
-            logger.info("[SPATIAL ANALYSIS START]")
-            
+        try:          
             # Process LiDAR scan
             lidar_obstacles = []
             full_lidar_scan = {}
             if lidar_scan is not None:
                 lidar_obstacles, full_lidar_scan = self.process_lidar_scan(lidar_scan, return_full_scan=True)
-                logger.info(f"[DEBUG] Full LiDAR scan: {len(full_lidar_scan)} angles")
-
             else:
                 logger.warning("[DEBUG] No LIDAR data available!")
             
             # Calculate clearances in each direction
             clearances = self._calculate_clearances_from_lidar(lidar_obstacles)
-            logger.info(f"[DEBUG] Clearances: {clearances}")
 
             # FIXED THRESHOLD: Always use safe_distance (1.0m)
             adaptive_threshold = self.safe_distance_threshold  # Always 1.0m
@@ -341,20 +325,15 @@ class SpatialDetector:
             # Nav2 handles direction finding - just use default
             safe_directions = []  # Not used anymore
             recommended_direction = 'forward'  # Default - Nav2 decides
-            logger.info(f"[DEBUG] Nav2 will handle direction planning")
-            
+  
             # Calculate overall safety score
             safety_score = self._calculate_safety_score_from_obstacles(lidar_obstacles)
-            logger.info(f"[DEBUG] Safety score: {safety_score}/10")
-            
+
             # Provide fallback clear_paths if empty
             if not safe_directions:
-                logger.warning("[DEBUG] No safe directions found, adding 'cautious_forward' fallback")
                 final_clear_paths = ['cautious_forward']
             else:
                 final_clear_paths = safe_directions
-            
-            logger.info(f"[DEBUG] Final clear_paths: {final_clear_paths}")
             
             # Build result
             result = {
@@ -367,9 +346,6 @@ class SpatialDetector:
                 'clearances': clearances,
                 'full_lidar_scan': full_lidar_scan
             }
-            
-            logger.info("[SPATIAL ANALYSIS END]")
-            logger.info("=" * 60)
             
             return result
             

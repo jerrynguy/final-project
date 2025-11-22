@@ -240,12 +240,6 @@ class RobotVisionAnalyzer:
                     }
                     
                     detected_objects.append(detected_obj)
-                    
-                    logger.debug(
-                        f"[YOLO] Detected {detected_obj['class']} "
-                        f"at {center_x:.0f},{center_y:.0f} "
-                        f"(~{distance_estimate:.1f}m, conf={confidence:.2f})"
-                    )
             
             if detected_objects:
                 logger.info(f"[YOLO] Found {len(detected_objects)} {target_class}(s)")
@@ -275,8 +269,6 @@ class RobotVisionAnalyzer:
                 return lidar_distance, 'lidar'
         
         # PRIORITY 2: Fallback to heuristic (when LiDAR unavailable/out of range)
-        logger.warning("[DISTANCE] Falling back to heuristic estimation")
-        
         normalized_height = bbox_height / frame_height
         
         if normalized_height > 0.7:
