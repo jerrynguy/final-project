@@ -175,26 +175,23 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 ```mermaid
 flowchart TD
 
-    subgraph Host["HOST MACHINE"]
+subgraph Host["HOST MACHINE"]
+    ROS2Node["ROS2 Humble (Native)"]
+    ROS2Node --> A1["Gazebo + Nav2 + SLAM Toolbox + TurtleBot3"]
+    ROS2Node --> A2["Topics: /cmd_vel, /scan, /odom, /map"]
+    ROS2Node --> A3["Cyclone DDS (RMW)"]
+end
 
-        subgraph ROS2["ROS2 Humble (Native)"]
-            A1["Gazebo + Nav2 + SLAM Toolbox + TurtleBot3"]
-            A2["Topics: /cmd_vel, /scan, /odom, /map"]
-            A3["Cyclone DDS (RMW)"]
-        end
+NATNode["NAT Container (nvidia-nat)"]
+NATNode --> B1["Python 3.11 venv (NAT Agent)"]
+NATNode --> B2["System Python 3.10 (rclpy + SLAM subprocess)"]
+NATNode --> B3["core/ros2_node.py (Subprocess Bridge)"]
+NATNode --> B4["perception/slam_controller.py (SLAM Manager)"]
+NATNode --> B5["Persistent daemon for sensor streaming"]
+NATNode --> B6["AI Agent + YOLO + Mission Controller"]
 
-    end
+ROS2Node -->| "ROS2 DDS Network (Cyclone DDS)" | NATNode
 
-    ROS2 -->| "ROS2 DDS Network (Cyclone DDS)" | NAT
-
-    subgraph NAT["NAT Container (nvidia-nat)"]
-        B1["Python 3.11 venv (NAT Agent)"]
-        B2["System Python 3.10 (rclpy + SLAM subprocess)"]
-        B3["core/ros2_node.py (Subprocess Bridge)"]
-        B4["perception/slam_controller.py (SLAM Manager)"]
-        B5["Persistent daemon for sensor streaming"]
-        B6["AI Agent + YOLO + Mission Controller"]
-    end
 
 
 
