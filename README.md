@@ -170,33 +170,45 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 
 ---
 
-## 🏗️ Architecture Diagram
+## 🏗️ Architecture Diagram 
 
 ```mermaid
 flowchart TD
+%% Class definitions for colors
+classDef ros2 fill:#cce5ff,stroke:#3399ff,stroke-width:1px;
+classDef nat fill:#d4edda,stroke:#28a745,stroke-width:1px;
+classDef ai fill:#fff3cd,stroke:#ffc107,stroke-width:1px;
 
-%% Subgraph ROS2
+%% Subgraph Host Machine
 subgraph Host["HOST MACHINE"]
     ROS2Node["ROS2 Humble (Native)"]
+    class ROS2Node ros2
     ROS2Node --> A1["Gazebo + Nav2 + SLAM Toolbox + TurtleBot3"]
     ROS2Node --> A2["Topics /cmd_vel, /scan, /odom, /map"]
     ROS2Node --> A3["Cyclone DDS RMW"]
+    class A1,A2,A3 ros2
 end
 
-%% Subgraph NAT
-NATNode["NAT Container (nvidia-nat)"]
-NATNode --> B1["Python 3.11 venv (NAT Agent)"]
-NATNode --> B2["System Python 3.10 (rclpy + SLAM subprocess)"]
-NATNode --> B3["core/ros2_node.py (Subprocess Bridge)"]
-NATNode --> B4["perception/slam_controller.py (SLAM Manager)"]
-NATNode --> B5["Persistent daemon for sensor streaming"]
-NATNode --> B6["AI Agent + YOLO + Mission Controller"]
+%% Subgraph NAT Container
+subgraph NAT["NAT Container (nvidia-nat)"]
+    NATNode["NAT Core"]
+    class NATNode nat
+    NATNode --> B1["Python 3.11 venv (NAT Agent)"]
+    NATNode --> B2["System Python 3.10 (rclpy + SLAM subprocess)"]
+    NATNode --> B3["core/ros2_node.py (Subprocess Bridge)"]
+    NATNode --> B4["perception/slam_controller.py (SLAM Manager)"]
+    NATNode --> B5["Persistent daemon for sensor streaming"]
+    NATNode --> B6["AI Agent + YOLO + Mission Controller"]
+    class B1,B2,B3,B4,B5 nat
+    class B6 ai
+end
 
-%% Kết nối ROS2 → NAT
-ROS2Node --> NATNode
+%% Edge with intermediate node for label
+DDS["ROS2 DDS Network (Cyclone DDS)"]
+class DDS ros2
+ROS2Node --> DDS --> NATNode
 
-
-
+---
 
 
 ## 🏗️ Kiến trúc Native ROS2
