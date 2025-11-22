@@ -170,6 +170,30 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 
 ---
 
+## 🏗️ Architecture Diagram
+
+```mermaid
+flowchart TD
+    subgraph Host[HOST MACHINE]
+        subgraph ROS2[ROS2 Humble (Native)]
+            A1[Gazebo + Nav2 + SLAM Toolbox + TurtleBot3]
+            A2[Topics:\n/cmd_vel, /scan, /odom, /map]
+            A3[Cyclone DDS (RMW)]
+        end
+    end
+
+    ROS2 -->|ROS2 DDS Network\n(Cyclone DDS)| NAT
+
+    subgraph NAT[NAT Container (nvidia-nat)]
+        B1[Python 3.11 venv (NAT Agent)]
+        B2[System Python 3.10\n(rclpy + SLAM subprocess)]
+        B3[core/ros2_node.py\n(Subprocess Bridge)]
+        B4[perception/slam_controller.py\n(SLAM Manager)]
+        B5[Persistent daemon for sensor streaming]
+        B6[AI Agent + YOLO + Mission Controller]
+    end
+
+
 ## 🏗️ Kiến trúc Native ROS2
 
 ### **Python Version Challenge**
