@@ -175,9 +175,10 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 ```mermaid
 flowchart TD
 %% Class definitions for colors
-classDef ros2 fill:#cce5ff,stroke:#3399ff,stroke-width:1px;
-classDef nat fill:#d4edda,stroke:#28a745,stroke-width:1px;
-classDef ai fill:#fff3cd,stroke:#ffc107,stroke-width:1px;
+classDef ros2 fill:#cce5ff,stroke:#3399ff,stroke-width:1px,color:#333;
+classDef nat fill:#d4edda,stroke:#28a745,stroke-width:1px,color:#333;
+classDef ai fill:#fff3cd,stroke:#ffc107,stroke-width:1px,color:#333;
+classDef edge fill:none,stroke:#555,stroke-width:1px,color:#333;
 
 %% Subgraph Host Machine
 subgraph Host["HOST MACHINE"]
@@ -207,6 +208,7 @@ end
 DDS["ROS2 DDS Network (Cyclone DDS)"]
 class DDS ros2
 ROS2Node --> DDS --> NATNode
+class DDS edge
 
 ```
 
