@@ -10,6 +10,7 @@ import os
 os.environ['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
 
 import rclpy
+import logging
 from rclpy.action import ActionClient
 try:
     from sensor_msgs.msg import LaserScan
@@ -29,6 +30,7 @@ import time
 import sys
 import select
 
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # QoS Configuration
@@ -208,6 +210,14 @@ class ROS2Daemon:
         rclpy.spin_until_future_complete(self.node, send_future, timeout_sec=2.0)
         
         goal_handle = send_future.result()
+
+        # Handle timeout/ None case
+        if goal_handle is None:
+            logger.error("[NAV2 DAEMON] Goal send timeout - action server not ready")
+            self.nav2_state = 'failed'
+            self._publish_message({'type': 'nav2_state', 'state': 'failed'})
+            return False
+        
         if goal_handle.accepted:
             self.nav2_state = 'navigating'
             self.nav2_goal_handle = goal_handle

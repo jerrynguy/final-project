@@ -657,8 +657,12 @@ async def run_robot_control_loop(
                 nav2_ready and 
                 robot_pos is not None and
                 robot_interface.nav2_interface and
-                not robot_interface.nav2_interface.is_navigating()
+                not robot_interface.nav2_interface.is_navigating() and
+                mission_controller.mission.type != 'explore_area'
             )
+
+            if mission_controller.mission.type == 'explore_area':
+                logger.debug("[NAV2] Explore mode - using manual navigation only")
 
             if can_use_nav2:
                 # Try to convert directive to Nav2 goal

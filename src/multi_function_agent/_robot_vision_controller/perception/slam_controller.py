@@ -110,8 +110,15 @@ class SLAMController:
             
             def _async_save():
                 try:
+                    ros2_cmd = '/opt/ros/humble/bin/ros2'
+
+                    # Check if ros2 binary exists
+                    if not os.path.exists(ros2_cmd):
+                        logger.error(f"[SLAM] ros2 binary not found at {ros2_cmd}")
+                        return
+
                     result = subprocess.run(
-                        ['ros2', 'run', 'nav2_map_server', 'map_saver_cli', '-f', save_path],
+                        [ros2_cmd, 'run', 'nav2_map_server', 'map_saver_cli', '-f', save_path],
                         capture_output=True,
                         timeout=2.0
                     )
