@@ -94,23 +94,37 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 ### **Thành phần chính:**
 
 #### **1. ROS2 Environment (Native Host)**
-```
-┌─────────────────────────────────────────────┐
-│   ROS2 Humble + Nav2 + SLAM + Gazebo        │
-├─────────────────────────────────────────────┤
-│  • TurtleBot3 Burger Simulation (Gazebo)    │
-│  • SLAM Toolbox (Autonomous mapping)        │
-│    - Real-time map building                 │
-│    - Auto-save every 5s                     │
-│    - Map quality validation                 │
-│  • Nav2 Navigation Stack                    │
-│    - Global Planner (Dijkstra/A*)           │
-│    - Local Planner (DWA)                    │
-│    - Costmap (Obstacle inflation)           │
-│    - Recovery Behaviors                     │
-│  • LIDAR Scanner (360° safety)              │
-│  • Cyclone DDS (RMW middleware)             │
-└─────────────────────────────────────────────┘
+
+```mermaid
+flowchart TD
+%% Class definitions
+classDef ros2 fill:#cce5ff,stroke:#3399ff,stroke-width:1px,color:#333;
+
+%% Subgraph ROS2 Stack
+subgraph ROS2Stack["ROS2 Humble + Nav2 + SLAM + Gazebo"]
+    TB3["TurtleBot3 Burger Simulation (Gazebo)"]
+    subgraph SLAM["SLAM Toolbox (Autonomous mapping)"]
+        SLAM_RT["Real-time map building"]
+        SLAM_SAVE["Auto-save every 5s"]
+        SLAM_VAL["Map quality validation"]
+    end
+    subgraph Nav2["Nav2 Navigation Stack"]
+        GP["Global Planner (Dijkstra/A*)"]
+        LP["Local Planner (DWA)"]
+        CM["Costmap (Obstacle inflation)"]
+        RB["Recovery Behaviors"]
+    end
+    LIDAR["LIDAR Scanner (360° safety)"]
+    DDS["Cyclone DDS (RMW middleware)"]
+end
+
+ROS2Stack --> TB3
+ROS2Stack --> SLAM
+ROS2Stack --> Nav2
+ROS2Stack --> LIDAR
+ROS2Stack --> DDS
+
+class ROS2Stack,TB3,SLAM,SLAM_RT,SLAM_SAVE,SLAM_VAL,Nav2,GP,LP,CM,RB,LIDAR,DDS ros2
 ```
 
 **ROS2 Topics:**
@@ -123,40 +137,54 @@ Hệ thống được thiết kế theo **kiến trúc ROS2 DDS Native Communica
 ---
 
 #### **2. NAT-Agent Container (Python 3.11 + ROS2 Bridge)**
-```
-┌─────────────────────────────────────────────┐
-│     NVIDIA NAT + AI Agent Container         │
-├─────────────────────────────────────────────┤
-│  • LLM Parser (Llama 3.1 70B)               │
-│    - Natural language → Mission structure   │
-│    - Mission validation & requirements      │
-│    - 1x at startup only                     │
-│  • AI Recovery Agent (Llama 3.2 3B)         │
-│    - Stuck detection & intelligent escape   │
-│    - Explore mode only                      │
-│    - On-demand (~1-3 times per mission)     │
-│  • YOLO Object Detection (v11n)             │
-│    - 80 COCO classes                        │
-│    - 2Hz cached inference                   │
-│  • Mission Controller                       │
-│    - State machine for mission tracking     │
-│    - Mission requirements validation        │
-│    - Progress monitoring                    │
-│  • SLAM Controller                          │
-│    - Autonomous map generation              │
-│    - Subprocess lifecycle management        │
-│    - Auto-save + quality validation         │
-│  • Navigation Reasoner                      │
-│    - Hybrid Nav2/Manual decision logic      │
-│    - SLAM-optimized exploration             │
-│  • Vision Analyzer                          │
-│    - YOLO + LIDAR fusion                    │
-│    - Spatial awareness                      │
-│  • ROS2 Subprocess Bridge                   │
-│    - Python 3.11 → System Python 3.10       │
-│    - Persistent daemon for sensor data      │
-│    - Cyclone DDS communication              │
-└─────────────────────────────────────────────┘
+
+```mermaid
+flowchart TD
+%% Class definitions
+classDef nat fill:#d4edda,stroke:#28a745,stroke-width:1px,color:#333;
+classDef ai fill:#fff3cd,stroke:#ffc107,stroke-width:1px,color:#333;
+
+subgraph NAT["NVIDIA NAT + AI Agent Container"]
+    LLM1["LLM Parser (Llama 3.1 70B)"]
+    LLM1 --> LLM1a["Natural language → Mission structure"]
+    LLM1 --> LLM1b["Mission validation & requirements"]
+    LLM1 --> LLM1c["1x at startup only"]
+
+    LLM2["AI Recovery Agent (Llama 3.2 3B)"]
+    LLM2 --> LLM2a["Stuck detection & intelligent escape"]
+    LLM2 --> LLM2b["Explore mode only"]
+    LLM2 --> LLM2c["On-demand (~1-3 times per mission)"]
+
+    YOLO["YOLO Object Detection (v11n)"]
+    YOLO --> YOLOa["80 COCO classes"]
+    YOLO --> YOLOb["2Hz cached inference"]
+
+    MissionCtrl["Mission Controller"]
+    MissionCtrl --> MCa["State machine for mission tracking"]
+    MissionCtrl --> MCb["Mission requirements validation"]
+    MissionCtrl --> MCc["Progress monitoring"]
+
+    SLAMCtrl["SLAM Controller"]
+    SLAMCtrl --> SCa["Autonomous map generation"]
+    SLAMCtrl --> SCb["Subprocess lifecycle management"]
+    SLAMCtrl --> SCc["Auto-save + quality validation"]
+
+    NavReasoner["Navigation Reasoner"]
+    NavReasoner --> NR1["Hybrid Nav2/Manual decision logic"]
+    NavReasoner --> NR2["SLAM-optimized exploration"]
+
+    Vision["Vision Analyzer"]
+    Vision --> V1["YOLO + LIDAR fusion"]
+    Vision --> V2["Spatial awareness"]
+
+    ROSBridge["ROS2 Subprocess Bridge"]
+    ROSBridge --> RB1["Python 3.11 → System Python 3.10"]
+    ROSBridge --> RB2["Persistent daemon for sensor data"]
+    ROSBridge --> RB3["Cyclone DDS communication"]
+end
+
+class NAT,LLM1,LLM2,YOLO,MissionCtrl,SLAMCtrl,NavReasoner,Vision,ROSBridge nat
+class LLM1a,LLM1b,LLM1c,LLM2a,LLM2b,LLM2c,YOLOa,YOLOb,MCa,MCb,MCc,SCa,SCb,SCc,NR1,NR2,V1,V2,RB1,RB2,RB3 ai
 ```
 
 **Key Features:**
