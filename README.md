@@ -212,45 +212,41 @@ class LLM1a,LLM1b,LLM1c,LLM2a,LLM2b,LLM2c,YOLOa,YOLOb,MCa,MCb,MCc,SCa,SCb,SCc,NR
 
 ```mermaid
 flowchart TD
-%% Class definitions
+%% Class definitions for colors
 classDef ros2 fill:#cce5ff,stroke:#3399ff,stroke-width:1px,color:#333;
 classDef nat fill:#d4edda,stroke:#28a745,stroke-width:1px,color:#333;
 classDef ai fill:#fff3cd,stroke:#ffc107,stroke-width:1px,color:#333;
 classDef edge fill:#e88010,stroke:#555,stroke-width:1px,color:#333;
 
-%% Host Machine
+%% Subgraph Host Machine
 subgraph Host["HOST MACHINE"]
-    subgraph ROS2Stack["ROS2 Humble (Native)"]
-        Gazebo["Gazebo + TurtleBot3"]
-        SLAM["SLAM Toolbox + Nav2"]
-        Topics["Topics /cmd_vel, /scan, /odom, /map"]
-        DDS["Cyclone DDS RMW"]
-    end
+    ROS2Node["ROS2 Humble (Native)"]
+    class ROS2Node ros2
+    ROS2Node --> A1["Gazebo + Nav2 + SLAM Toolbox + TurtleBot3"]
+    ROS2Node --> A2["Topics /cmd_vel, /scan, /odom, /map"]
+    ROS2Node --> A3["Cyclone DDS RMW"]
+    class A1,A2,A3 ros2
 end
-class ROS2Stack,Gazebo,SLAM,Topics,DDS ros2
 
-%% NAT Container
+%% Subgraph NAT Container
 subgraph NAT["NAT Container (nvidia-nat)"]
-    NATCore["NAT Core"]
-    subgraph PythonStack["Python Layers"]
-        Py311["Python 3.11 venv (NAT Agent)"]
-        Py310["System Python 3.10 (rclpy + SLAM subprocess)"]
-        Bridge["core/ros2_node.py (Subprocess Bridge)"]
-    end
-    AI["AI Agent + YOLO + Mission Controller"]
+    NATNode["NAT Core"]
+    class NATNode nat
+    NATNode --> B1["Python 3.11 venv (NAT Agent)"]
+    NATNode --> B2["System Python 3.10 (rclpy + SLAM subprocess)"]
+    NATNode --> B3["core/ros2_node.py (Subprocess Bridge)"]
+    NATNode --> B4["perception/slam_controller.py (SLAM Manager)"]
+    NATNode --> B5["Persistent daemon for sensor streaming"]
+    NATNode --> B6["AI Agent + YOLO + Mission Controller"]
+    class B1,B2,B3,B4,B5 nat
+    class B6 ai
 end
-class NATCore,Py311,Py310,Bridge nat
-class AI ai
 
-%% Connections
-Gazebo --> SLAM
-SLAM --> Topics
-ROS2Stack --> DDS
-DDS --> NATCore
-NATCore --> Py311
-NATCore --> Py310
-NATCore --> Bridge
-NATCore --> AI
+%% Edge with intermediate node for label
+DDS["ROS2 DDS Network (Cyclone DDS)"]
+class DDS ros2
+ROS2Node --> DDS --> NATNode
+class DDS edge
 ```
 
 **Communication Flow:**
