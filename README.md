@@ -208,8 +208,7 @@ DDS["ROS2 DDS Network (Cyclone DDS)"]
 class DDS ros2
 ROS2Node --> DDS --> NATNode
 
----
-
+```
 
 ## 🏗️ Kiến trúc Native ROS2
 
