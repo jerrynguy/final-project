@@ -411,6 +411,7 @@ async def run_robot_control_loop(
 
     while max_iterations is None or iteration < max_iterations:
         try:
+            # STEP 0: Frame Acquisition
             lidar_snapshot = robot_interface.lidar_data
             frame = await stream_handler.get_latest_frame()
             if frame is None:
@@ -420,6 +421,7 @@ async def run_robot_control_loop(
             iteration += 1
             PerformanceLogger.log_iteration_start(iteration)
 
+            # STEP 1: Nav2 Active Navigation Safety
             # Check Nav2 safety
             if nav2_ready and robot_interface.nav2_interface:
                 if robot_interface.nav2_interface.is_navigating():
@@ -432,6 +434,7 @@ async def run_robot_control_loop(
                         })
                         continue
             
+            # STEP 2: Emergency LIDAR Safety Veto
             # Safety check
             safety_result = await safety_monitor.handle_safety_override(
                 lidar_snapshot, robot_interface, results
@@ -445,6 +448,7 @@ async def run_robot_control_loop(
                 await asyncio.sleep(0.05)
                 continue
 
+            # STEP 3: Stuck Detection & AI Recovery
             # Stuck detection and ai recovery
             if mission_controller.mission.type == 'explore_area':
                 robot_pos = robot_interface.ros_node.get_robot_pose()
@@ -504,6 +508,7 @@ async def run_robot_control_loop(
                             logger.error(f"[AI RECOVERY] Failed to generate/execute escape command: {e}")
                             # Proceed with normal navigation if recovery fails
 
+            # STEP 4: Vision Analysis (Cached at 2Hz)
             # Vision analysis (cached at 2Hz)
             current_time = time.time()
             
@@ -535,6 +540,7 @@ async def run_robot_control_loop(
             PerformanceLogger.log_vision_analysis(vision_analysis, obstacles)
             results["obstacles_detected"].extend(obstacles)
             
+            # STEP 5: Mission State Update & SLAM Auto-Save
             # Mission update
             robot_pos = robot_interface.ros_node.get_robot_pose()
             if robot_pos is None and hasattr(robot_interface, 'robot_status'):
@@ -563,6 +569,7 @@ async def run_robot_control_loop(
                     if saved:
                         last_slam_save = current_time
             
+            # STEP 6: Mission Completion Check
             # Check mission completion
             if mission_result['completed']:
                 logger.info(f"✅ Mission complete: {mission_controller.mission.description}")
@@ -589,6 +596,7 @@ async def run_robot_control_loop(
                 results["final_status"] = "mission_completed"
                 break
 
+            # STEP 7: Nav2 Goal Planning (Patrol/Follow Only)
             # Navigation decision
             mission_directive = mission_result['directive']
 
@@ -638,6 +646,7 @@ async def run_robot_control_loop(
                     else:
                         can_use_nav2 = False
 
+            # STEP 8: Manual Navigation Decision (Fallback)
             # Manual control fallback
             if not can_use_nav2 or not nav2_goal:
                 navigation_decision = navigation_reasoner.decide_next_action(
@@ -660,6 +669,7 @@ async def run_robot_control_loop(
                 
                 results["navigation_decisions"].append(navigation_decision)
                 
+                # STEP 9: Pre-Execution Safety Check
                 # Pre-execution safety check
                 critical_threshold = getattr(safety_monitor, 'CRITICAL_DISTANCE', 0.4)
                 if lidar_snapshot is not None:
@@ -683,6 +693,7 @@ async def run_robot_control_loop(
                         "reason": "no_lidar"
                     }
 
+                # STEP 10: Command Execution
                 command_success = await robot_interface.execute_command(navigation_decision)
                 PerformanceLogger.log_command_result(command_success)
                 

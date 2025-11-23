@@ -228,7 +228,7 @@ class RobotVisionModelManager:
             # Test with dummy inference to warm up connection
             logger.info("[AI RECOVERY] Testing model connection....")
             test_response = self.ai_recovery_model.invoke(
-                messages=[{"role": "user", "content": "ping"}])
+                [{"role": "user", "content": "ping"}])
             
             if test_response:
                 load_time = time.time() - start_time

@@ -96,13 +96,13 @@ class LidarSafetyMonitor:
     def _generate_escape_command(self, threat_angle: float, distance: float) -> Dict:
         """Generate emergency escape command based on threat direction."""
         
-        # CRITICAL: If extremely close, STOP FIRST
+        # CRITICAL: If extremely close, STOP FIRST, then back up
         if distance < self.CRITICAL_DISTANCE:
             logger.error(f"[EMERGENCY STOP] Obstacle at {distance:.2f}m!")
             return {
                 'action': 'stop',
                 'parameters': {
-                    'linear_velocity': 0.0,
+                    'linear_velocity': -0.2,
                     'angular_velocity': 0.0,
                     'duration': 0.2
                 },
@@ -130,7 +130,7 @@ class LidarSafetyMonitor:
             return {
                 'action': 'rotate_right',
                 'parameters': {
-                    'linear_velocity': 0.0,     # ← FIX: Đã là 0.0, không di chuyển
+                    'linear_velocity': -0.3,    
                     'angular_velocity': -1.5,   # Fast rotate away
                     'duration': 0.3
                 },
@@ -143,7 +143,7 @@ class LidarSafetyMonitor:
             return {
                 'action': 'rotate_left',
                 'parameters': {
-                    'linear_velocity': 0.0,     # ← FIX: Đã là 0.0, không di chuyển
+                    'linear_velocity': -0.3,     
                     'angular_velocity': 1.5,    # Fast rotate away
                     'duration': 0.3
                 },
