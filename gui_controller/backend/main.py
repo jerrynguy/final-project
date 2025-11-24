@@ -145,14 +145,18 @@ if [ -z "$CONTAINER_ID" ]; then
 fi
 
 echo "Using container: $CONTAINER_ID"
+echo "Executing NAT command..."
 
-# Execute NAT
-docker exec -it "$CONTAINER_ID" bash -c "
+# Execute NAT (without -it for non-interactive automation)
+docker exec "$CONTAINER_ID" bash -c "
     source /workspace/.venv/bin/activate && \\
     cd /workspace/mounted_code && \\
-    uv pip install -e . && \\
+    uv pip install -e . > /dev/null 2>&1 && \\
     nat run --config_file {CONFIG_FILE} --input '{full_prompt}'
 "
+
+echo ""
+echo "Command execution completed!"
 """
     
     script_path = "/tmp/run_nat_temp.sh"
