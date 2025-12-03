@@ -17,13 +17,13 @@ class StuckDetector:
     Detects when robot fails to make progress over multiple iterations.
     """
     
-    def __init__(self, window_size: int = 3, displacement_threshold: float = 0.05):
+    def __init__(self, window_size: int = 2, displacement_threshold: float = 0.08):
         """
         Initialize stuck detector.
         
         Args:
-            window_size: Number of iterations to check (default: 3)
-            displacement_threshold: Minimum displacement in meters to consider "moving" (default: 5cm)
+            window_size: Number of iterations to check (default: 2)
+            displacement_threshold: Minimum displacement in meters to consider "moving" (default: 8cm)
         """
         self.window_size = window_size
         self.displacement_threshold = displacement_threshold

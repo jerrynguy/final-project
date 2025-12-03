@@ -669,29 +669,37 @@ async def run_robot_control_loop(
                 
                 results["navigation_decisions"].append(navigation_decision)
                 
-                # STEP 9: Pre-Execution Safety Check
-                # Pre-execution safety check
-                critical_threshold = getattr(safety_monitor, 'CRITICAL_DISTANCE', 0.4)
+                # STEP 9: Predictive Escape (replaces dumb stop)
+                # Intelligent escape before hitting critical zone
+                predictive_threshold = 0.25  # Between WARNING (0.3m) and CRITICAL (0.2m)
+                
                 if lidar_snapshot is not None:
                     min_dist = safety_monitor.get_min_distance(lidar_snapshot)
                     
-                    if min_dist < critical_threshold:
-                        PerformanceLogger.log_safety_abort(min_dist, navigation_decision['action'])
+                    if min_dist < predictive_threshold:
+                        logger.warning(
+                            f"[PREDICTIVE ESCAPE] Obstacle at {min_dist:.2f}m, executing escape"
+                        )
                         
-                        navigation_decision = {
-                            "action": "stop",
-                            "parameters": {"linear_velocity": 0.0, "angular_velocity": 0.0, "duration": 0.05},
-                            "reason": f"pre_abort_{min_dist:.2f}m"
-                        }
+                        # Generate intelligent escape using existing safety logic
+                        escape_result = safety_monitor.check_safety(lidar_snapshot)
                         
-                        await robot_interface.execute_command(navigation_decision)
-                        continue
-                else:
-                    navigation_decision = {
-                        "action": "stop",
-                        "parameters": {"linear_velocity": 0.0, "angular_velocity": 0.0, "duration": 0.1},
-                        "reason": "no_lidar"
-                    }
+                        if escape_result['veto']:
+                            escape_command = escape_result['command']
+                            
+                            PerformanceLogger.log_safety_abort(min_dist, 'predictive_escape')
+                            
+                            await robot_interface.execute_command(escape_command)
+                            
+                            results["navigation_decisions"].append({
+                                'action': 'predictive_escape',
+                                'reason': f'obstacle_{min_dist:.2f}m',
+                                'escape_action': escape_command['action']
+                            })
+                            
+                            await asyncio.sleep(0.1)
+                            continue
+                # No else needed - Layer 2 (LIDAR Veto) handles no-lidar case
 
                 # STEP 10: Command Execution
                 command_success = await robot_interface.execute_command(navigation_decision)

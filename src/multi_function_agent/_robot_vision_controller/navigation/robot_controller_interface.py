@@ -464,33 +464,31 @@ class RobotControllerInterface(Node):
                             f"[EMERGENCY ABORT] Obstacle at {min_dist:.2f}m! "
                             f"Stopping immediately (iteration {i+1}/{iterations})"
                         )
-                        # ✅ THAY ĐỔI: Dùng ros_node
                         for _ in range(5):
                             self.ros_node.publish_stop()
                             await asyncio.sleep(0.01)
                         return False
                     
+                    # WARNING ZONE: 0.2m - 0.3m (less aggressive scaling)
                     elif min_dist < safety_monitor.WARNING_DISTANCE:
                         scale = (min_dist - safety_monitor.CRITICAL_DISTANCE) / \
                                 (safety_monitor.WARNING_DISTANCE - safety_monitor.CRITICAL_DISTANCE)
-                        scale = max(0.3, min(0.6, scale))
+                        scale = max(0.4, min(0.7, scale))  # Changed from 0.3-0.6 to 0.4-0.7
                         
                         logger.warning(
-                            f"[CRITICAL ZONE] Obstacle at {min_dist:.2f}m, "
+                            f"[WARNING ZONE] Obstacle at {min_dist:.2f}m, "
                             f"scaling to {scale*100:.0f}%"
                         )
                         
-                        # ✅ THAY ĐỔI: Dùng ros_node
                         scaled_linear = original_linear * scale
                         scaled_angular = original_angular * scale
                         self.ros_node.publish_velocity(scaled_linear, scaled_angular)
                         
-                    # CAUTION: 0.4-0.7m - Gentle reduction
+                    # CAUTION ZONE: 0.3m - 1.0m (gentler reduction)
                     elif min_dist < safety_monitor.CAUTION_DISTANCE:
-                        # Gentle reduction: 60-100% speed
                         scale = (min_dist - safety_monitor.WARNING_DISTANCE) / \
                                 (safety_monitor.CAUTION_DISTANCE - safety_monitor.WARNING_DISTANCE)
-                        scale = max(0.6, min(1.0, scale))
+                        scale = max(0.7, min(1.0, scale))  # Changed from 0.6-1.0 to 0.7-1.0
                         
                         logger.debug(
                             f"[CAUTION ZONE] Obstacle at {min_dist:.2f}m, "
