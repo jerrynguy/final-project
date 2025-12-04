@@ -63,7 +63,7 @@ class SpatialDetector:
         self.use_lidar = True
         self.lidar_max_range = 3.5
         self.lidar_min_range = 0.12
-        self.lidar_critical_distance = self.safety_validator.CRITICAL_DISTANCE
+        self.lidar_critical_distance = self.safety_validator.EMERGENCY_DISTANCE
         self.lidar_warning_distance = self.safety_validator.WARNING_DISTANCE
         
         # Navigation thresholds

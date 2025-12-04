@@ -102,9 +102,9 @@ class LidarSafetyMonitor:
             return {
                 'action': 'stop',
                 'parameters': {
-                    'linear_velocity': -0.2,
-                    'angular_velocity': 0.0,
-                    'duration': 0.2
+                    'linear_velocity': -0.3,
+                    'angular_velocity': 0.8,
+                    'duration': 0.8
                 },
                 'confidence': 1.0,
                 'reason': f'emergency_stop_{distance:.2f}m'
