@@ -438,30 +438,6 @@ class NavigationReasoner:
                         'confidence': 0.8,
                         'reason': 'explore_turn_right'
                     }
-                
-        elif directive == 'explore_rotate':
-            return {
-                'action': 'rotate_left',
-                'parameters': {
-                    'linear_velocity': 0.0,
-                    'angular_velocity': random.choice([self.NORMAL_TURN_SPEED, -self.NORMAL_TURN_SPEED]),
-                    'duration': 2.0
-                },
-                'confidence': 0.8,
-                'reason': 'explore_360_scan'
-            }
-        
-        elif directive == 'explore_search':
-            return {
-                'action': 'move_forward',
-                'parameters': {
-                    'linear_velocity': boosted_speed * 0.4,
-                    'angular_velocity': random.choice([self.NORMAL_TURN_SPEED, -self.NORMAL_TURN_SPEED]),
-                    'duration': 1.5
-                },
-                'confidence': 0.7,
-                'reason': 'explore_search_mode'
-            }
         
         else:  # Default or unknown directive
             # Standard exploration behavior
