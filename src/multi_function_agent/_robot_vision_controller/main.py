@@ -123,8 +123,9 @@ async def _robot_vision_controller(
         vision_analyzer = RobotVisionAnalyzer(robot_controller=robot_interface)
         safety_monitor = LidarSafetyMonitor()
         stuck_detector = StuckDetector(
-            window_size=3,
-            displacement_threshold=0.05
+            window_size=5,
+            displacement_threshold=0.12,
+            area_radius=0.5
         )
         ai_recovery_agent = AIRecoveryAgent()
 
@@ -218,16 +219,7 @@ async def _robot_vision_controller(
 
         # Stop SLAM and save map
         if slam_controller and slam_controller.is_running:
-            logger.info("[SLAM] Saving final map...")
-            slam_controller.stop_slam(save_final_map=True)
-            
-            is_valid, reason = slam_controller.verify_map_quality()
-            if is_valid:
-                logger.info(f"✅ Map created: ~/my_map.yaml")
-                control_results['slam_map_created'] = True
-            else:
-                logger.warning(f"⚠️ Map quality issue: {reason}")
-                control_results['slam_map_created'] = False
+            slam_controller.stop_slam()
         
         # Format output
         formatted_output = OutputFormatter.format_control_results(
@@ -407,7 +399,6 @@ async def run_robot_control_loop(
     iteration = 0
     last_vision_update = 0
     cached_vision_analysis = None
-    last_slam_save = 0
 
     while max_iterations is None or iteration < max_iterations:
         try:
@@ -540,7 +531,7 @@ async def run_robot_control_loop(
             PerformanceLogger.log_vision_analysis(vision_analysis, obstacles)
             results["obstacles_detected"].extend(obstacles)
             
-            # STEP 5: Mission State Update & SLAM Auto-Save
+            # STEP 5: Mission State Update 
             # Mission update
             robot_pos = robot_interface.ros_node.get_robot_pose()
             if robot_pos is None and hasattr(robot_interface, 'robot_status'):
@@ -560,22 +551,11 @@ async def run_robot_control_loop(
                 robot_pos=robot_pos,
                 frame_info=frame_info
             )
-
-            # SLAM auto-save
-            if slam_controller and slam_controller.is_running:
-                current_time = time.time()
-                if current_time - last_slam_save >= 10.0:
-                    saved = slam_controller.auto_save_map()
-                    if saved:
-                        last_slam_save = current_time
             
             # STEP 6: Mission Completion Check
             # Check mission completion
             if mission_result['completed']:
                 logger.info(f"✅ Mission complete: {mission_controller.mission.description}")
-                
-                if slam_controller and slam_controller.is_running:
-                    slam_controller.save_map()
 
                 # Log AI recovery stats
                 if ai_recovery_agent.total_invocations > 0:

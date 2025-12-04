@@ -27,6 +27,16 @@ functions:
     max_speed: 0.6
     exploration_speed_boost: 1.5  # Multiplier for explore mode (1.5x = medium safety → near-low safety speed)
     description: "Real-time robot vision navigation and control system"
+
+    ros:
+    enabled: true
+    use_daemon: true
+    rmw_implementation: rmw_cyclonedds_cpp
+    domain_id: 0
+    daemon_script_path: "/workspace/mounted_code/src/multi_function_agent/_robot_vision_controller/core/ros2_node/nat_ros2_daemon.py"
+    ros_setup:
+      - "/opt/ros/humble/setup.bash"
+
     
     # SLAM Configuration
     use_slam: true

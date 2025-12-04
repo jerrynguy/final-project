@@ -211,9 +211,9 @@ Generate escape command (JSON only):"""
                 raise ValueError(f"Missing required fields: {required_fields}")
             
             # Validate ranges
-            escape_cmd['linear'] = max(-0.3, min(0.3, float(escape_cmd['linear'])))
+            escape_cmd['linear'] = max(-0.5, min(0.5, float(escape_cmd['linear'])))
             escape_cmd['angular'] = max(-1.5, min(1.5, float(escape_cmd['angular'])))
-            escape_cmd['duration'] = max(0.5, min(2.5, float(escape_cmd['duration'])))
+            escape_cmd['duration'] = max(0.8, min(2.8, float(escape_cmd['duration'])))
             
             self.successful_parses += 1
             return escape_cmd
@@ -238,7 +238,7 @@ Generate escape command (JSON only):"""
         if front_clear < 0.5:
             return {
                 'action': 'move_backward',
-                'linear': -0.2,
+                'linear': -0.5,
                 'angular': 0.0,
                 'duration': 1.0,
                 'reason': 'fallback_backup_front_blocked'
@@ -248,7 +248,7 @@ Generate escape command (JSON only):"""
         elif left_clear < right_clear:
             return {
                 'action': 'rotate_right',
-                'linear': 0.0,
+                'linear': -0.3,
                 'angular': -1.0,
                 'duration': 1.5,
                 'reason': 'fallback_rotate_right_left_blocked'
@@ -258,7 +258,7 @@ Generate escape command (JSON only):"""
         else:
             return {
                 'action': 'rotate_left',
-                'linear': 0.0,
+                'linear': -0.3,
                 'angular': 1.0,
                 'duration': 1.5,
                 'reason': 'fallback_rotate_left_right_blocked'
