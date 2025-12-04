@@ -97,4 +97,12 @@ class ExploreMission(BaseMission):
     
     def _get_directive(self) -> str:
         """Get exploration directive."""
-        return 'explore_random'
+        import random
+
+        if random.random() < 0.2:
+            return 'explore_rotate'
+        
+        elif random.random() < 0.1:
+            return 'explore_search'
+        else:
+            return 'explore_random'

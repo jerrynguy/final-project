@@ -373,47 +373,94 @@ class NavigationReasoner:
                 return self._make_navigation_decision(vision_analysis)
         
         # ===== EXPLORATION DIRECTIVES =====
-        elif directive == 'explore_random':
-            # SLAM exploration: prioritize unvisited areas
-            # Use wider turns to cover more ground
+        elif directive.startswith('explore_'):
+            clearances = vision_analysis.get('clearance', {})
+            obstacles = vision_analysis.get('obstacles', [])
+
+            front_clear = clearances.get('forward', 999)
+            left_clear = clearances.get('left', 999)
+            right_clear = clearances.get('right', 999)
+
             boosted_speed = self.base_speed * self.exploration_boost
+
+            import random
+            if front_clear > self.SAFE_DISTANCE:
+                return {
+                    'action': 'move_forward',
+                    'parameters': {
+                        'linear_velocity': boosted_speed,
+                        'angular_velocity': random.uniform(-0.2, 0.2),  # Slight random wiggle
+                        'duration': 2.0
+                    },
+                    'confidence': 0.9,
+                    'reason': 'explore_move_forward'
+                }
+            
+            elif front_clear > self.WARNING_DISTANCE:
+                if left_clear > right_clear + 0.3:
+                    angular_bias = random.uniform(0.1, 0.3)
+                elif right_clear > left_clear + 0.3:
+                    angular_bias = random.uniform(-0.3, -0.1)
+                else:
+                    angular_bias = random.uniform(-0.2, 0.2)
+                
+                return {
+                    'action': 'move_forward',
+                    'parameters': {
+                        'linear_velocity': boosted_speed * 0.5,
+                        'angular_velocity': angular_bias,
+                        'duration': 1.5
+                    },
+                    'confidence': 0.7,
+                    'reason': 'explore_cautious_forward'
+                }
+            
+            else:
+                if left_clear > right_clear:
+                    return {
+                        'action': 'rotate_left',
+                        'parameters': {
+                            'linear_velocity': boosted_speed * 0.2,
+                            'angular_velocity': self.NORMAL_TURN_SPEED,
+                            'duration': 1.2
+                        },
+                        'confidence': 0.8,
+                        'reason': 'explore_turn_left'
+                    }
+                else:
+                    return {
+                        'action': 'rotate_right',
+                        'parameters': {
+                            'linear_velocity': boosted_speed * 0.2,
+                            'angular_velocity': -self.NORMAL_TURN_SPEED,
+                            'duration': 0.8
+                        },
+                        'confidence': 0.8,
+                        'reason': 'explore_turn_right'
+                    }
+                
+        elif directive == 'explore_rotate':
             return {
-                'action': 'move_forward',
+                'action': 'rotate_left',
                 'parameters': {
-                    'linear_velocity': boosted_speed * 0.75,
-                    'angular_velocity': 0.4,  # Slight sweep for SLAM coverage
-                    'duration': 2
+                    'linear_velocity': 0.0,
+                    'angular_velocity': random.choice([self.NORMAL_TURN_SPEED, -self.NORMAL_TURN_SPEED]),
+                    'duration': 2.0
                 },
-                'confidence': 0.85,
-                'reason': 'slam_exploration'
+                'confidence': 0.8,
+                'reason': 'explore_360_scan'
             }
         
         elif directive == 'explore_search':
-            # Thorough SLAM mapping - slower, more coverage
-            boosted_speed = self.base_speed * self.exploration_boost
-            return {
-                'action': 'move_forward',
-                'parameters': {
-                    'linear_velocity': boosted_speed * 0.5,
-                    'angular_velocity': 0.2,  # More sweeping motion
-                    'duration': 1.0
-                },
-                'confidence': 0.7,
-                'reason': 'slam_thorough_mapping'
-            }
-        
-        elif directive == 'explore_cautious':
-            # Cautious SLAM in tight spaces
-            boosted_speed = self.base_speed * self.exploration_boost
             return {
                 'action': 'move_forward',
                 'parameters': {
                     'linear_velocity': boosted_speed * 0.4,
-                    'angular_velocity': 0.1,
-                    'duration': 0.8
+                    'angular_velocity': random.choice([self.NORMAL_TURN_SPEED, -self.NORMAL_TURN_SPEED]),
+                    'duration': 1.5
                 },
-                'confidence': 0.6,
-                'reason': 'slam_cautious'
+                'confidence': 0.7,
+                'reason': 'explore_search_mode'
             }
         
         else:  # Default or unknown directive
