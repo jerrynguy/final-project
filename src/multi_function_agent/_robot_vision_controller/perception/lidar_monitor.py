@@ -118,8 +118,8 @@ class LidarSafetyMonitor:
                 'action': 'move_backward',
                 'parameters': {
                     'linear_velocity': -0.4,   # Fast backup
-                    'angular_velocity': 0.0,   # Straight back
-                    'duration': 0.5
+                    'angular_velocity': 0.8,   # Straight back
+                    'duration': 0.8
                 },
                 'confidence': 1.0,
                 'reason': f'emergency_backup_{distance:.2f}m'

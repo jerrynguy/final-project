@@ -469,7 +469,7 @@ class RobotControllerInterface(Node):
                             await asyncio.sleep(0.01)
                         return False
                     
-                    # WARNING ZONE: 0.2m - 0.3m (less aggressive scaling)
+                    # WARNING ZONE: 0.15m - 0.3m (less aggressive scaling)
                     elif min_dist < safety_monitor.WARNING_DISTANCE:
                         scale = (min_dist - safety_monitor.CRITICAL_DISTANCE) / \
                                 (safety_monitor.WARNING_DISTANCE - safety_monitor.CRITICAL_DISTANCE)

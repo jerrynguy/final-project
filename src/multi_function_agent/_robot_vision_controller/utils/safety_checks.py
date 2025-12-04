@@ -41,7 +41,7 @@ class SafetyValidator:
     def __init__(self):
         """Initialize safety validator with default thresholds."""
         # Distance thresholds (meters)
-        self.EMERGENCY_DISTANCE = 0.2   # Hardware limit - NEVER touch
+        self.EMERGENCY_DISTANCE = 0.15   # Hardware limit - NEVER touch
         self.CRITICAL_DISTANCE_EXPLORE = 0.3   # Explore mode
         self.CRITICAL_DISTANCE_PATROL = 0.25    # Patrol mode (trust Nav2)
         self.CAUTION_DISTANCE = 1.0     # Start slowing down
