@@ -191,7 +191,7 @@ async def _robot_vision_controller(
         slam_controller = None
         if mission_controller.mission.type == 'explore_area':
             logger.info("[SLAM] Starting mapping...")
-            slam_controller = SLAMController(map_save_path="~/my_map")
+            slam_controller = SLAMController()
             
             slam_started = slam_controller.start_slam()
             if not slam_started:
@@ -253,9 +253,6 @@ async def _robot_vision_controller(
             logger.info("✅ Mission completed")
                     
     except Exception as e:
-        if 'slam_controller' in locals() and slam_controller and slam_controller.is_running:
-            slam_controller.stop_slam(save_final_map=True)
-
         logger.error(f"❌ Control error: {e}")
         yield FunctionInfo.from_fn(
             ErrorHandlers.control_error(e, stream_url, is_yolo_ready()),
@@ -693,16 +690,7 @@ async def run_robot_control_loop(
             results["iterations"] = iteration
             await asyncio.sleep(0.05)
             
-        except asyncio.CancelledError:
-            if slam_controller and slam_controller.is_running:
-                slam_controller.save_map()
-            results["final_status"] = "interrupted"
-            break
-            
-        except Exception as e:
-            if slam_controller and slam_controller.is_running:
-                slam_controller.save_map()
-                
+        except Exception as e:                
             logger.error(f"❌ Loop error: {e}")
             results["final_status"] = f"error: {e}"
             try:

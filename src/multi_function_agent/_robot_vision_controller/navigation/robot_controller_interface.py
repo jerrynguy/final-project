@@ -351,7 +351,7 @@ class RobotControllerInterface(Node):
         
         min_dist = safety_monitor.get_min_distance(lidar_to_check)
         
-        if min_dist < safety_monitor.CRITICAL_DISTANCE:
+        if min_dist < safety_monitor.CRITICAL_DISTANCE - 0.03:
             logger.error(f"[ABORT NAV2] Obstacle at {min_dist:.2f}m")
             self.cancel_nav2_navigation()
             return False
@@ -390,6 +390,7 @@ class RobotControllerInterface(Node):
         try:
             action = navigation_decision.get('action', 'stop')
             parameters = navigation_decision.get('parameters', {})
+            is_backup_command = action in ['move_backward', 'emergency_stop']
             
             # Create Twist directly
             class TwistMsg:
@@ -422,7 +423,8 @@ class RobotControllerInterface(Node):
             # Send command
             success = await self._send_command(
                 twist_msg,
-                parameters.get('duration', 1.0)
+                parameters.get('duration', 1.0),
+                is_backup =is_backup_command
             )
             
             if success:
@@ -436,7 +438,7 @@ class RobotControllerInterface(Node):
             self.robot_status.state = RobotState.ERROR
             return False
     
-    async def _send_command(self, twist: Twist, duration: float) -> bool:
+    async def _send_command(self, twist: Twist, duration: float, is_backup: bool = False) -> bool:
         try:
             logger.info(
                 f"Publishing cmd_vel: linear={twist.linear.x:.3f}, "
@@ -459,7 +461,13 @@ class RobotControllerInterface(Node):
                 if self.lidar_data is not None:
                     min_dist = safety_monitor.get_min_distance(self.lidar_data)
                     
-                    if min_dist < safety_monitor.CRITICAL_DISTANCE:
+                    if is_backup:
+                            logger.warning(
+                                f"[BACKUP CMD] Obstacle at {min_dist:.2f}m, "
+                                f"reducing speed by 50%"
+                            )
+                            self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
+                    elif min_dist < 0.12:
                         logger.error(
                             f"[EMERGENCY ABORT] Obstacle at {min_dist:.2f}m! "
                             f"Stopping immediately (iteration {i+1}/{iterations})"
@@ -470,10 +478,10 @@ class RobotControllerInterface(Node):
                         return False
                     
                     # WARNING ZONE: 0.15m - 0.3m (less aggressive scaling)
-                    elif min_dist < safety_monitor.WARNING_DISTANCE:
-                        scale = (min_dist - safety_monitor.CRITICAL_DISTANCE) / \
-                                (safety_monitor.WARNING_DISTANCE - safety_monitor.CRITICAL_DISTANCE)
-                        scale = max(0.4, min(0.7, scale))  # Changed from 0.3-0.6 to 0.4-0.7
+                    elif min_dist < 0.25:
+                        scale = (min_dist - 0.12) / \
+                                (0.25 - 0.12)
+                        scale = max(0.5, min(1.0, scale))  # Changed from 0.3-0.6 to 0.4-0.7
                         
                         logger.warning(
                             f"[WARNING ZONE] Obstacle at {min_dist:.2f}m, "
