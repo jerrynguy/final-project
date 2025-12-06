@@ -390,7 +390,6 @@ class RobotControllerInterface(Node):
         try:
             action = navigation_decision.get('action', 'stop')
             parameters = navigation_decision.get('parameters', {})
-            is_backup_command = action in ['move_backward', 'emergency_stop']
             
             # Create Twist directly
             class TwistMsg:
@@ -424,7 +423,6 @@ class RobotControllerInterface(Node):
             success = await self._send_command(
                 twist_msg,
                 parameters.get('duration', 1.0),
-                is_backup =is_backup_command
             )
             
             if success:
@@ -437,97 +435,58 @@ class RobotControllerInterface(Node):
             logger.error(f"Command execution failed: {e}")
             self.robot_status.state = RobotState.ERROR
             return False
-    
-    async def _send_command(self, twist: Twist, duration: float, is_backup: bool = False) -> bool:
+
+    async def _send_command(self, twist: Twist, duration: float) -> bool:
+        """
+        Execute command with SINGLE critical abort check.
+        No velocity scaling - trust Nav2 or manual decision.
+        """
         try:
             logger.info(
-                f"Publishing cmd_vel: linear={twist.linear.x:.3f}, "
+                f"Publishing: linear={twist.linear.x:.3f}, "
                 f"angular={twist.angular.z:.3f}, duration={duration:.2f}s"
             )
             
-            publish_rate = 20
+            publish_rate = 20  # 20Hz
             interval = 1.0 / publish_rate
             iterations = int(duration / interval)
             
+            # Simplified monitor - critical check only
             from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
-            mode = 'explore'
-            safety_monitor = LidarSafetyMonitor(mode=mode)
-
-            # Cache original velocities
-            original_linear = twist.linear.x
-            original_angular = twist.angular.z
+            safety_monitor = LidarSafetyMonitor()
             
             for i in range(max(1, iterations)):
+                # ONLY check critical distance (no scaling)
                 if self.lidar_data is not None:
-                    min_dist = safety_monitor.get_min_distance(self.lidar_data)
+                    abort_result = safety_monitor.check_critical_abort(self.lidar_data)
                     
-                    if is_backup:
-                            logger.warning(
-                                f"[BACKUP CMD] Obstacle at {min_dist:.2f}m, "
-                                f"reducing speed by 50%"
-                            )
-                            self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
-                    elif min_dist < 0.12:
+                    if abort_result['abort']:
                         logger.error(
-                            f"[EMERGENCY ABORT] Obstacle at {min_dist:.2f}m! "
-                            f"Stopping immediately (iteration {i+1}/{iterations})"
+                            f"[ABORT] Critical distance {abort_result['min_distance']:.3f}m"
                         )
-                        for _ in range(5):
-                            self.ros_node.publish_stop()
-                            await asyncio.sleep(0.01)
+                        # Execute emergency backup
+                        backup_cmd = abort_result['command']
+                        for _ in range(10):
+                            self.ros_node.publish_velocity(
+                                backup_cmd['parameters']['linear_velocity'],
+                                backup_cmd['parameters']['angular_velocity']
+                            )
+                            await asyncio.sleep(0.05)
                         return False
-                    
-                    # WARNING ZONE: 0.15m - 0.3m (less aggressive scaling)
-                    elif min_dist < 0.25:
-                        scale = (min_dist - 0.12) / \
-                                (0.25 - 0.12)
-                        scale = max(0.5, min(1.0, scale))  # Changed from 0.3-0.6 to 0.4-0.7
-                        
-                        logger.warning(
-                            f"[WARNING ZONE] Obstacle at {min_dist:.2f}m, "
-                            f"scaling to {scale*100:.0f}%"
-                        )
-                        
-                        scaled_linear = original_linear * scale
-                        scaled_angular = original_angular * scale
-                        self.ros_node.publish_velocity(scaled_linear, scaled_angular)
-                        
-                    # CAUTION ZONE: 0.3m - 1.0m (gentler reduction)
-                    elif min_dist < safety_monitor.CAUTION_DISTANCE:
-                        scale = (min_dist - safety_monitor.WARNING_DISTANCE) / \
-                                (safety_monitor.CAUTION_DISTANCE - safety_monitor.WARNING_DISTANCE)
-                        scale = max(0.7, min(1.0, scale))  # Changed from 0.6-1.0 to 0.7-1.0
-                        
-                        logger.debug(
-                            f"[CAUTION ZONE] Obstacle at {min_dist:.2f}m, "
-                            f"scaling to {scale*100:.0f}%"
-                        )
-                        
-                        scaled_linear = original_linear * scale
-                        scaled_angular = original_angular * scale
-                        self.ros_node.publish_velocity(scaled_linear, scaled_angular)
-                    else:
-                        # ✅ THAY ĐỔI: Dùng ros_node
-                        self.ros_node.publish_velocity(original_linear, original_angular)
-                else:
-                    # ✅ THAY ĐỔI: Dùng ros_node
-                    self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
                 
+                # No velocity scaling - publish as-is
+                self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
                 await asyncio.sleep(interval)
             
             return True
             
         except Exception as e:
-            logger.error(f"Failed to send command: {e}")
-            try:
-                # ✅ THAY ĐỔI: Dùng ros_node
-                for _ in range(5):
-                    self.ros_node.publish_stop()
-                    await asyncio.sleep(0.01)
-            except:
-                pass
+            logger.error(f"Command execution failed: {e}")
+            for _ in range(5):
+                self.ros_node.publish_stop()
+                await asyncio.sleep(0.01)
             return False
-    
+
     async def _emergency_stop(self) -> bool:
         try:
             self.ros_node.publish_stop()

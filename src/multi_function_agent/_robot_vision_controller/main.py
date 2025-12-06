@@ -15,8 +15,6 @@ from multi_function_agent._robot_vision_controller.perception.lidar_monitor impo
 from multi_function_agent._robot_vision_controller.perception.rtsp_stream_handler import RTSPStreamHandler
 from multi_function_agent._robot_vision_controller.perception.robot_vision_analyzer import RobotVisionAnalyzer
 
-from multi_function_agent._robot_vision_controller.navigation.stuck_detector import StuckDetector
-from multi_function_agent._robot_vision_controller.navigation.ai_recovery_agent import AIRecoveryAgent
 from multi_function_agent._robot_vision_controller.navigation.navigation_reasoner import NavigationReasoner
 from multi_function_agent._robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
 try:
@@ -122,12 +120,6 @@ async def _robot_vision_controller(
         robot_interface = RobotControllerInterface()
         vision_analyzer = RobotVisionAnalyzer(robot_controller=robot_interface)
         safety_monitor = LidarSafetyMonitor()
-        stuck_detector = StuckDetector(
-            window_size=5,
-            displacement_threshold=0.12,
-            area_radius=0.5
-        )
-        ai_recovery_agent = AIRecoveryAgent()
 
         logger.info("✅ AI Recovery system initialized for explore mode")
 
@@ -210,8 +202,6 @@ async def _robot_vision_controller(
             safety_validator,
             safety_monitor,
             mission_controller,
-            stuck_detector,
-            ai_recovery_agent, 
             slam_controller=slam_controller,
             nav2_ready=nav2_ready,
             max_iterations=None,
@@ -305,61 +295,6 @@ def _mission_directive_to_nav2_goal(
     return None
 
 # =============================================================================
-# Nav2 Continuous Safety Monitor
-# =============================================================================
-
-async def _nav2_continuous_safety_monitor(
-    robot_interface,
-    safety_monitor: LidarSafetyMonitor,
-    results: Dict
-) -> None:
-    """Background task for continuous Nav2 safety monitoring at 20Hz."""
-    
-    try:
-        while robot_interface.nav2_interface.is_navigating():
-            lidar_data = robot_interface.lidar_data
-            
-            if lidar_data is None:
-                logger.warning("[NAV2] No LIDAR - forcing stop")
-                robot_interface.cancel_nav2_navigation()
-                await robot_interface.execute_command({
-                    'action': 'stop',
-                    'parameters': {'linear_velocity': 0.0, 'angular_velocity': 0.0, 'duration': 0.1},
-                    'reason': 'nav2_monitor_no_lidar'
-                })
-                break
-            
-            min_dist = safety_monitor.get_min_distance(lidar_data)
-            
-            if min_dist < safety_monitor.CRITICAL_DISTANCE:
-                logger.error(f"[NAV2 ABORT] Obstacle at {min_dist:.2f}m")
-                robot_interface.cancel_nav2_navigation()
-                
-                stop_cmd = {
-                    'action': 'stop',
-                    'parameters': {'linear_velocity': 0.0, 'angular_velocity': 0.0, 'duration': 0.1},
-                    'reason': f'nav2_abort_{min_dist:.2f}m'
-                }
-                await robot_interface.execute_command(stop_cmd)
-                
-                results["navigation_decisions"].append({
-                    'action': 'nav2_abort',
-                    'reason': f'critical_{min_dist:.2f}m'
-                })
-                break
-            
-            await asyncio.sleep(0.05)
-    
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        logger.error(f"[NAV2 MONITOR] Error: {e}")
-        try:
-            robot_interface.cancel_nav2_navigation()
-        except:
-            pass
-
-# =============================================================================
 # Control Loop
 # =============================================================================
 async def run_robot_control_loop(
@@ -371,8 +306,6 @@ async def run_robot_control_loop(
     safety_validator: SafetyValidator,
     safety_monitor: LidarSafetyMonitor,
     mission_controller: MissionController, 
-    stuck_detector: StuckDetector,
-    ai_recovery_agent: AIRecoveryAgent, 
     slam_controller: Optional[SLAMController] = None,
     nav2_ready: bool = False,
     max_iterations: int = None,
@@ -409,94 +342,24 @@ async def run_robot_control_loop(
             iteration += 1
             PerformanceLogger.log_iteration_start(iteration)
 
-            # STEP 1: Nav2 Active Navigation Safety
-            # Check Nav2 safety
-            if nav2_ready and robot_interface.nav2_interface:
-                if robot_interface.nav2_interface.is_navigating():
-                    safe = robot_interface.check_nav2_safety(lidar_override=lidar_snapshot)
-                    if not safe:
-                        logger.warning("[NAV2] Safety abort")
-                        results["navigation_decisions"].append({
-                            'action': 'abort_nav2',
-                            'reason': 'safety_critical'
-                        })
-                        continue
+            # STEP 1: Critical Abort Check (SINGLE LAYER)
+            # CHANGED: Unified single-layer safety check
+            abort_result = safety_monitor.check_critical_abort(lidar_snapshot)
             
-            # STEP 2: Emergency LIDAR Safety Veto
-            # Safety check
-            safety_result = await safety_monitor.handle_safety_override(
-                lidar_snapshot, robot_interface, results
-            )
-            
-            if safety_result['veto']:
-                asyncio.create_task(
-                    robot_interface.execute_command(safety_result['command'])
+            if abort_result['abort']:
+                logger.error(
+                    f"[CRITICAL ABORT] Obstacle at {abort_result['min_distance']:.3f}m"
                 )
-                results["commands_sent"].append(safety_result['command'])
-                await asyncio.sleep(0.05)
+                await robot_interface.execute_command(abort_result['command'])
+                results["navigation_decisions"].append({
+                    'action': 'critical_abort',
+                    'distance': abort_result['min_distance'],
+                    'reason': abort_result.get('reason', 'critical')
+                })
+                await asyncio.sleep(0.1)
                 continue
 
-            # STEP 3: Stuck Detection & AI Recovery
-            # Stuck detection and ai recovery
-            if mission_controller.mission.type == 'explore_area':
-                robot_pos = robot_interface.ros_node.get_robot_pose()
-                if robot_pos:
-                    #Get last action
-                    last_action = (
-                        results["navigation_decisions"][-1].get('action','unknown')
-                        if results["navigation_decisions"] else 'unknown'
-                    )
-
-                    # Check if stuck
-                    is_stuck = stuck_detector.update(robot_pos, last_action)
-
-                    if is_stuck:
-                        logger.warning("[STUCK] Robot appears to be stuck, invoking AI recovery")
-
-                        # Get recent action history
-                        recent_actions = [
-                            d.get('action','unknown') for d in results["navigation_decisions"][-5:]
-                        ]
-
-                        # Generate AI escape command
-                        try:
-                            escape_command = await ai_recovery_agent.generate_escape_command(
-                                vision_context = vision_analysis,
-                                last_actions= recent_actions,
-                                stuck_reason="position_not_changing"
-                            )
-
-                            logger.info(f"[AI RECOVERY] Executing escape command: {escape_command}")
-
-                            # Convert to navigation decision format
-                            navigation_decision = {
-                                'action': escape_command['action'],
-                                'parameters': {
-                                    'linear_velocity': escape_command['linear'],
-                                    'angular_velocity': escape_command['angular'],
-                                    'duration': escape_command['duration']
-                                },
-                                'confidence': 0.95,
-                                'reason': f"ai_recovery_{escape_command['reason']}"
-                            }
-
-                            command_success = await robot_interface.execute_command(navigation_decision)
-
-                            if command_success:
-                                results["navigation_decisions"].append(navigation_decision)
-                                results["commands_sent"].append(navigation_decision)
-
-                                # Reset stuck detector after successful recovery
-                                stuck_detector.reset()
-                                logger.info("✅ [AI RECOVERY] Escape executed, resuming exploration")
-
-                            await asyncio.sleep(0.1)
-                            continue
-                        except Exception as e:
-                            logger.error(f"[AI RECOVERY] Failed to generate/execute escape command: {e}")
-                            # Proceed with normal navigation if recovery fails
-
-            # STEP 4: Vision Analysis (Cached at 2Hz)
+            # STEP 2: Vision Analysis (Cached at 2Hz)
             # Vision analysis (cached at 2Hz)
             current_time = time.time()
             
@@ -528,7 +391,7 @@ async def run_robot_control_loop(
             PerformanceLogger.log_vision_analysis(vision_analysis, obstacles)
             results["obstacles_detected"].extend(obstacles)
             
-            # STEP 5: Mission State Update 
+            # STEP 3: Mission State Update 
             # Mission update
             robot_pos = robot_interface.ros_node.get_robot_pose()
             if robot_pos is None and hasattr(robot_interface, 'robot_status'):
@@ -549,31 +412,15 @@ async def run_robot_control_loop(
                 frame_info=frame_info
             )
             
-            # STEP 6: Mission Completion Check
+            # STEP 4: Mission Completion Check
             # Check mission completion
             if mission_result['completed']:
                 logger.info(f"✅ Mission complete: {mission_controller.mission.description}")
-
-                # Log AI recovery stats
-                if ai_recovery_agent.total_invocations > 0:
-                    stats = ai_recovery_agent.get_stats()
-                    logger.info(
-                        f"[AI RECOVERY] Invoked {ai_recovery_agent.total_invocations} times, "
-                        f"Success rate: {stats['parse_success_rate']:.1%}, "
-                        f"Avg latency: {stats['avg_inference_time_ms']:.0f}ms"
-                    )
-                
-                stuck_stats = stuck_detector.get_stats()
-                logger.info(
-                    f"Total checks: {stuck_stats['total_checks']}, "
-                    f"Stuck events: {stuck_stats['stuck_events']}, "
-                    f"Stuck rate: {stuck_stats['stuck_rate']:.1%}"
-                )
                 
                 results["final_status"] = "mission_completed"
                 break
 
-            # STEP 7: Nav2 Goal Planning (Patrol/Follow Only)
+            # STEP 5: Nav2 Goal Planning (Patrol/Follow Only)
             # Navigation decision
             mission_directive = mission_result['directive']
 
@@ -604,14 +451,6 @@ async def run_robot_control_loop(
                     )
                     
                     if nav2_success:
-                        monitor_task = asyncio.create_task(
-                             _nav2_continuous_safety_monitor(
-                                 robot_interface,
-                                 safety_monitor,
-                                 results
-                             )
-                         )
-
                         results["navigation_decisions"].append({
                             'action': 'nav2_goal',
                             'parameters': {'x': goal_x, 'y': goal_y, 'theta': goal_theta},
@@ -623,15 +462,14 @@ async def run_robot_control_loop(
                     else:
                         can_use_nav2 = False
 
-            # STEP 8: Manual Navigation Decision (Fallback)
+            # STEP 6: Manual Navigation Decision (Fallback)
             # Manual control fallback
             if not can_use_nav2 or not nav2_goal:
                 navigation_decision = navigation_reasoner.decide_next_action(
                     vision_analysis,
                     robot_pos=robot_pos,
                     spatial_detector=vision_analyzer.spatial_detector,
-                    lidar_override=None,
-                    mission_directive=mission_directive
+                    mission_directive=mission_directive  # CHANGED: Removed lidar_override param
                 )
                 
                 PerformanceLogger.log_navigation_decision(navigation_decision)
@@ -645,40 +483,8 @@ async def run_robot_control_loop(
                     }
                 
                 results["navigation_decisions"].append(navigation_decision)
-                
-                # STEP 9: Predictive Escape (replaces dumb stop)
-                # Intelligent escape before hitting critical zone
-                predictive_threshold = 0.25  # Between WARNING (0.3m) and CRITICAL (0.2m)
-                
-                if lidar_snapshot is not None:
-                    min_dist = safety_monitor.get_min_distance(lidar_snapshot)
-                    
-                    if min_dist < predictive_threshold:
-                        logger.warning(
-                            f"[PREDICTIVE ESCAPE] Obstacle at {min_dist:.2f}m, executing escape"
-                        )
-                        
-                        # Generate intelligent escape using existing safety logic
-                        escape_result = safety_monitor.check_safety(lidar_snapshot)
-                        
-                        if escape_result['veto']:
-                            escape_command = escape_result['command']
-                            
-                            PerformanceLogger.log_safety_abort(min_dist, 'predictive_escape')
-                            
-                            await robot_interface.execute_command(escape_command)
-                            
-                            results["navigation_decisions"].append({
-                                'action': 'predictive_escape',
-                                'reason': f'obstacle_{min_dist:.2f}m',
-                                'escape_action': escape_command['action']
-                            })
-                            
-                            await asyncio.sleep(0.1)
-                            continue
-                # No else needed - Layer 2 (LIDAR Veto) handles no-lidar case
 
-                # STEP 10: Command Execution
+                # STEP 7: Command Execution (was STEP 10)
                 command_success = await robot_interface.execute_command(navigation_decision)
                 PerformanceLogger.log_command_result(command_success)
                 
