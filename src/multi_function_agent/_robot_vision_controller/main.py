@@ -342,6 +342,17 @@ async def run_robot_control_loop(
             iteration += 1
             PerformanceLogger.log_iteration_start(iteration)
 
+            # Log robot position for tracking
+            robot_pos = robot_interface.ros_node.get_robot_pose()
+            if robot_pos:
+                logger.info(
+                    f"[POSITION] x={robot_pos['x']:.3f}m, "
+                    f"y={robot_pos['y']:.3f}m, "
+                    f"yaw={robot_pos['theta']:.3f}rad ({np.degrees(robot_pos['theta']):.1f}°)"
+                )
+            else:
+                logger.warning("[POSITION] No odometry data available")
+
             # STEP 1: Critical Abort Check (SINGLE LAYER)
             # CHANGED: Unified single-layer safety check
             abort_result = safety_monitor.check_critical_abort(lidar_snapshot)
@@ -356,6 +367,11 @@ async def run_robot_control_loop(
                     'distance': abort_result['min_distance'],
                     'reason': abort_result.get('reason', 'critical')
                 })
+                await asyncio.sleep(0.1)
+                continue
+
+            elif abort_result['command'] is not None:
+                await robot_interface.execute_command(abort_result['command'])
                 await asyncio.sleep(0.1)
                 continue
 
