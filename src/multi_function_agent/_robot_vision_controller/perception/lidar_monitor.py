@@ -1,50 +1,73 @@
 """
-LiDAR Safety Monitor Module (REDESIGNED v2)
-Single critical abort layer with hysteresis to prevent oscillation.
+LiDAR Safety Monitor Module (Smart Directional + Smart Recovery)
+Critical abort with intelligent recovery toward open space.
 """
 
 import time
 import logging
 import numpy as np
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
+
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
 
 logger = logging.getLogger(__name__)
 
 
 class LidarSafetyMonitor:
     """
-    Simplified critical-only safety monitor with hysteresis.
+    Smart directional safety monitor with intelligent recovery.
     
-    Hysteresis prevents oscillation:
-    - ABORT at 0.12m (critical threshold)
-    - RESUME at 0.25m (hysteresis gap)
-    - Cooldown period after abort (2.0s)
-    
-    This prevents back/forward loop when approaching obstacles.
+    Features:
+    - Direction-aware obstacle detection
+    - Smart recovery that turns toward open space
+    - Hysteresis to prevent oscillation
     """
     
-    # =========================================================================
-    # Thresholds (with hysteresis)
-    # =========================================================================
-    CRITICAL_DISTANCE = 0.2  # 20cm - Hardware protection (abort)
-    RESUME_DISTANCE = 0.35    # 35cm - Resume threshold (hysteresis gap)
-    
     def __init__(self):
-        """Initialize monitor with state tracking."""
+        """Initialize monitor with centralized thresholds."""
+        self.thresholds = SafetyThresholds
+        
         self.abort_count = 0
         
         # Hysteresis state tracking
-        self.last_abort_time = 0.0      # Timestamp of last abort
-        self.cooldown_duration = 2.0    # Cooldown period (seconds)
+        self.last_abort_time = 0.0
+        self.cooldown_duration = 2.0
+        
+        # Track current movement for smart abort
+        self.last_linear_velocity = 0.0
+        self.last_angular_velocity = 0.0
+    
+    def update_movement_state(self, linear_vel: float, angular_vel: float):
+        """Update current movement direction for smart abort logic."""
+        self.last_linear_velocity = linear_vel
+        self.last_angular_velocity = angular_vel
+    
+    def _is_moving_forward(self) -> bool:
+        """Check if robot is primarily moving forward (not turning)."""
+        return (abs(self.last_linear_velocity) > 0.1 and 
+                abs(self.last_angular_velocity) < 0.3)
+    
+    def _should_abort_for_obstacle(self, angle_deg: float, distance: float) -> bool:
+        """Smart abort decision based on obstacle angle and movement direction."""
+        is_forward = self._is_moving_forward()
+        
+        critical_threshold = self.thresholds.get_critical_distance_for_direction(
+            angle_deg, is_forward
+        )
+        
+        should_abort = distance < critical_threshold
+        
+        if should_abort:
+            logger.debug(
+                f"[ABORT CHECK] angle={angle_deg:.1f}°, dist={distance:.3f}m, "
+                f"threshold={critical_threshold:.3f}m, forward={is_forward} → ABORT"
+            )
+        
+        return should_abort
     
     def check_critical_abort(self, lidar_data) -> Dict:
         """
-        Check for critical distance with hysteresis to prevent oscillation.
-        
-        State Machine:
-        1. NORMAL: Can move freely, check for obstacles
-        2. ABORT: Obstacle < 0.12m → Emergency backup
-        3. COOLDOWN: After abort, wait until distance > 0.25m OR timeout
+        Check for critical distance with smart directional logic and recovery.
         """
         if lidar_data is None:
             logger.error("[CRITICAL] No LIDAR data - ABORT")
@@ -56,8 +79,8 @@ class LidarSafetyMonitor:
             }
         
         try:
-            # Get minimum distance from 360° LIDAR scan
-            min_distance = self._get_min_distance(lidar_data)
+            # Get obstacles with angles
+            obstacles_with_angles = self._get_obstacles_with_angles(lidar_data)
             current_time = time.time()
             
             # Calculate time since last abort
@@ -65,37 +88,55 @@ class LidarSafetyMonitor:
             in_cooldown = time_since_abort < self.cooldown_duration
             
             # =====================================================================
-            # STATE 1: Check if need to ABORT (critical distance reached)
+            # STATE 1: Check if need to ABORT (smart directional check)
             # =====================================================================
-            if min_distance < self.CRITICAL_DISTANCE and not in_cooldown:
-                # NEW ABORT - start cooldown timer
-                self.last_abort_time = current_time
-                self.abort_count += 1
+            if not in_cooldown:
+                # Find closest obstacle that should trigger abort
+                abort_obstacle = None
+                min_abort_distance = float('inf')
                 
-                logger.error(
-                    f"[ABORT #{self.abort_count}] Distance: {min_distance:.3f}m "
-                    f"→ EMERGENCY BACKUP"
-                )
+                for angle_deg, distance in obstacles_with_angles:
+                    if self._should_abort_for_obstacle(angle_deg, distance):
+                        if distance < min_abort_distance:
+                            min_abort_distance = distance
+                            abort_obstacle = (angle_deg, distance)
                 
-                return {
-                    'abort': True,
-                    'command': self._emergency_backup(),
-                    'min_distance': min_distance,
-                    'state': 'abort'
-                }
+                if abort_obstacle:
+                    angle, distance = abort_obstacle
+                    
+                    # NEW ABORT - start cooldown timer
+                    self.last_abort_time = current_time
+                    self.abort_count += 1
+                    
+                    logger.error(
+                        f"[ABORT #{self.abort_count}] Obstacle at {angle:.1f}° "
+                        f"({distance:.3f}m) → SMART RECOVERY"
+                    )
+                    
+                    # CHANGED: Smart recovery with clearance analysis
+                    clearances = self._analyze_clearances(obstacles_with_angles)
+                    
+                    return {
+                        'abort': True,
+                        'command': self._smart_recovery_command(angle, clearances),
+                        'min_distance': distance,
+                        'obstacle_angle': angle,
+                        'clearances': clearances,
+                        'state': 'abort'
+                    }
             
             # =====================================================================
             # STATE 2: In COOLDOWN after abort
             # =====================================================================
-            elif in_cooldown:
-                # Check if safe to resume (distance > hysteresis threshold)
-                if min_distance > self.RESUME_DISTANCE:
-                    # Sufficient clearance - clear cooldown and resume
+            if in_cooldown:
+                min_distance = self._get_min_distance(lidar_data)
+                
+                if min_distance > self.thresholds.RESUME_SAFE:
                     logger.info(
                         f"[RESUME] Clearance: {min_distance:.3f}m "
                         f"(after {time_since_abort:.1f}s cooldown) → NORMAL"
                     )
-                    self.last_abort_time = 0.0  # Reset cooldown timer
+                    self.last_abort_time = 0.0
                     
                     return {
                         'abort': False,
@@ -105,29 +146,28 @@ class LidarSafetyMonitor:
                     }
                 
                 else:
-                    # Still too close - stay in cooldown (pause movement)
                     logger.debug(
                         f"[COOLDOWN] {time_since_abort:.1f}s elapsed - "
-                        f"Distance: {min_distance:.3f}m (need > {self.RESUME_DISTANCE}m)"
+                        f"Distance: {min_distance:.3f}m (need > {self.thresholds.RESUME_SAFE}m)"
                     )
                     
                     return {
-                        'abort': False,  # Don't abort again
-                        'command': self._pause_command(),  # Stop briefly
+                        'abort': False,
+                        'command': self._pause_command(),
                         'min_distance': min_distance,
                         'state': 'cooldown'
                     }
             
             # =====================================================================
-            # STATE 3: NORMAL operation (safe to proceed)
+            # STATE 3: NORMAL operation
             # =====================================================================
-            else:
-                return {
-                    'abort': False,
-                    'command': None,
-                    'min_distance': min_distance,
-                    'state': 'normal'
-                }
+            min_distance = self._get_min_distance(lidar_data)
+            return {
+                'abort': False,
+                'command': None,
+                'min_distance': min_distance,
+                'state': 'normal'
+            }
             
         except Exception as e:
             logger.error(f"Safety check failed: {e}")
@@ -142,20 +182,43 @@ class LidarSafetyMonitor:
     # Helper Methods
     # =========================================================================
     
-    def _get_min_distance(self, lidar_data) -> float:
-        """
-        Extract minimum distance from LIDAR scan (360° coverage).
-        
-        Args:
-            lidar_data: LaserScan message
+    def _get_obstacles_with_angles(self, lidar_data) -> List[Tuple[float, float]]:
+        """Extract obstacles with their angles from LIDAR scan."""
+        try:
+            ranges = lidar_data.ranges
+            angle_min = lidar_data.angle_min
+            angle_increment = lidar_data.angle_increment
             
-        Returns:
-            float: Minimum valid distance in meters
-        """
+            obstacles = []
+            
+            for i, distance in enumerate(ranges):
+                if np.isnan(distance) or np.isinf(distance):
+                    continue
+                
+                angle_rad = angle_min + (i * angle_increment)
+                angle_deg = np.degrees(angle_rad)
+                
+                # Normalize to [-180, 180]
+                while angle_deg > 180:
+                    angle_deg -= 360
+                while angle_deg < -180:
+                    angle_deg += 360
+                
+                obstacles.append((angle_deg, distance))
+            
+            obstacles.sort(key=lambda x: x[1])
+            
+            return obstacles
+            
+        except Exception as e:
+            logger.error(f"Failed to extract obstacles with angles: {e}")
+            return []
+    
+    def _get_min_distance(self, lidar_data) -> float:
+        """Extract minimum distance from LIDAR scan (360° coverage)."""
         try:
             ranges = lidar_data.ranges
             
-            # Filter out invalid readings (NaN, Inf)
             valid_ranges = [
                 r for r in ranges 
                 if not (np.isnan(r) or np.isinf(r))
@@ -171,34 +234,90 @@ class LidarSafetyMonitor:
             logger.error(f"Failed to get min distance: {e}")
             return float('inf')
     
+    def get_min_distance(self, lidar_data) -> float:
+        """Public interface for minimum distance."""
+        return self._get_min_distance(lidar_data)
+    
+    def _analyze_clearances(self, obstacles_with_angles: List[Tuple[float, float]]) -> Dict:
+        """
+        Analyze clearance in left/right/front directions.
+        
+        Returns:
+            dict: {'front': distance, 'left': distance, 'right': distance}
+        """
+        clearances = {
+            'front': float('inf'),
+            'left': float('inf'),
+            'right': float('inf')
+        }
+        
+        for angle_deg, distance in obstacles_with_angles:
+            abs_angle = abs(angle_deg)
+            
+            # Front: ±45°
+            if abs_angle <= 45:
+                clearances['front'] = min(clearances['front'], distance)
+            
+            # Left: 45-135°
+            elif 45 < angle_deg <= 135:
+                clearances['left'] = min(clearances['left'], distance)
+            
+            # Right: -135 to -45°
+            elif -135 <= angle_deg < -45:
+                clearances['right'] = min(clearances['right'], distance)
+        
+        # Cap at max sensor range for readability
+        for key in clearances:
+            if clearances[key] == float('inf'):
+                clearances[key] = 3.5  # Max LiDAR range
+        
+        return clearances
+    
     # =========================================================================
     # Command Generators
     # =========================================================================
     
-    def _emergency_backup(self) -> Dict:
+    def _smart_recovery_command(self, obstacle_angle: float, clearances: Dict) -> Dict:
         """
-        Generate emergency backup command.
+        Generate smart recovery command that turns toward open space.
         
-        Returns:
-            dict: Navigation command to back away from obstacle
+        Strategy:
+        1. Compare left vs right clearances
+        2. Turn toward more open side while backing up
+        3. If equal, turn away from obstacle angle
         """
+        left_clear = clearances.get('left', 0)
+        right_clear = clearances.get('right', 0)
+        
+        # Decision: Turn toward more open side
+        if left_clear > right_clear + 0.2:
+            angular = 0.7  # Strong left turn
+            direction = "left"
+        elif right_clear > left_clear + 0.2:
+            angular = -0.7  # Strong right turn
+            direction = "right"
+        else:
+            # Equal clearance: turn away from obstacle angle
+            angular = 0.8 if obstacle_angle > 0 else -0.8
+            direction = "away_from_obstacle"
+        
+        logger.info(
+            f"[SMART RECOVERY] Clearances - Left: {left_clear:.2f}m, Right: {right_clear:.2f}m "
+            f"→ Turn {direction} (angular: {angular:.2f})"
+        )
+        
         return {
-            'action': 'move_backward',
+            'action': 'smart_recovery',
             'parameters': {
-                'linear_velocity': -0.3,   # Back up at 0.3 m/s
-                'angular_velocity': 0.0,   # Straight back
-                'duration': 0.8            # For 0.8 seconds (~24cm)
+                'linear_velocity': -0.25,  # Gentle backup
+                'angular_velocity': angular,  # Turn toward open space
+                'duration': 1.2  # Time to clear and turn
             },
-            'reason': 'critical_abort_backup'
+            'reason': f'smart_recovery_{direction}'
         }
     
     def _emergency_stop(self) -> Dict:
-        """
-        Generate emergency stop command.
-        
-        Returns:
-            dict: Navigation command to stop immediately
-        """
+        """Generate emergency stop command."""
         return {
             'action': 'stop',
             'parameters': {
@@ -210,18 +329,13 @@ class LidarSafetyMonitor:
         }
     
     def _pause_command(self) -> Dict:
-        """
-        Generate brief pause command during cooldown.
-        
-        Returns:
-            dict: Navigation command to pause briefly
-        """
+        """Generate brief pause command during cooldown."""
         return {
             'action': 'stop',
             'parameters': {
                 'linear_velocity': 0.0,
                 'angular_velocity': 0.0,
-                'duration': 0.3  # Short pause
+                'duration': 0.3
             },
             'reason': 'cooldown_pause'
         }
@@ -231,19 +345,15 @@ class LidarSafetyMonitor:
     # =========================================================================
     
     def get_stats(self) -> Dict:
-        """
-        Get safety monitor statistics.
-        
-        Returns:
-            dict: Statistics about abort events
-        """
+        """Get safety monitor statistics."""
         return {
             'total_aborts': self.abort_count,
             'in_cooldown': time.time() - self.last_abort_time < self.cooldown_duration,
             'cooldown_remaining': max(
                 0.0, 
                 self.cooldown_duration - (time.time() - self.last_abort_time)
-            )
+            ),
+            'movement_state': 'forward' if self._is_moving_forward() else 'turning'
         }
     
     def reset_stats(self):

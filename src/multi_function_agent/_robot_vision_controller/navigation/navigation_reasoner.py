@@ -14,7 +14,8 @@ from multi_function_agent._robot_vision_controller.utils.movement_commands impor
     NavigationAction,
     NavigationParameters
 )
-from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator, SafetyThresholds
+from multi_function_agent._robot_vision_controller.perception.frontier_detector import FrontierDetector
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,9 @@ class NavigationReasoner:
         
         self._setup_decision_parameters()
 
+        self. frontier_detector = FrontierDetector()    
+        self.use_frontier_detection = True
+
     def set_exploration_boost(self, boost: float):
         """
         Set speed boost factor for exploration missions.
@@ -81,9 +85,9 @@ class NavigationReasoner:
         self.CAUTION_SAFETY_THRESHOLD = self.nav_params.caution_threshold
         self.SAFE_THRESHOLD = self.nav_params.safe_threshold
         
-        self.CRITICAL_DISTANCE = self.safety_validator.CRITICAL_DISTANCE
-        self.WARNING_DISTANCE = self.safety_validator.WARNING_DISTANCE
-        self.SAFE_DISTANCE = self.safety_validator.SAFE_DISTANCE
+        self.CRITICAL_DISTANCE = SafetyThresholds.CRITICAL_ABORT
+        self.WARNING_DISTANCE = SafetyThresholds.WARNING_ZONE
+        self.SAFE_DISTANCE = SafetyThresholds.SAFE_ZONE
         
         self.SLOW_TURN_SPEED = self.nav_params.slow_turn_speed
         self.NORMAL_TURN_SPEED = self.nav_params.normal_turn_speed
@@ -282,7 +286,8 @@ class NavigationReasoner:
     def _execute_mission_directive(
         self,
         directive: str,
-        vision_analysis: Dict
+        vision_analysis: Dict, 
+        robot_pos: Optional[Dict] = None
     ) -> Dict[str, any]:
         """
         Execute specific mission directive with appropriate navigation behavior.
@@ -374,75 +379,138 @@ class NavigationReasoner:
         
         # ===== EXPLORATION DIRECTIVES =====
         elif directive.startswith('explore_'):
-            clearances = vision_analysis.get('clearance', {})
-            obstacles = vision_analysis.get('obstacles', [])
-
-            front_clear = clearances.get('forward', 999)
-            left_clear = clearances.get('left', 999)
-            right_clear = clearances.get('right', 999)
-
-            boosted_speed = self.base_speed * self.exploration_boost
-
-            import random
-            if front_clear > self.SAFE_DISTANCE:
-                return {
-                    'action': 'move_forward',
-                    'parameters': {
-                        'linear_velocity': boosted_speed,
-                        'angular_velocity': random.uniform(-0.2, 0.2),  # Slight random wiggle
-                        'duration': 2.0
-                    },
-                    'confidence': 0.9,
-                    'reason': 'explore_move_forward'
-                }
-            
-            elif front_clear > self.WARNING_DISTANCE:
-                if left_clear > right_clear + 0.3:
-                    angular_bias = random.uniform(0.1, 0.3)
-                elif right_clear > left_clear + 0.3:
-                    angular_bias = random.uniform(-0.3, -0.1)
-                else:
-                    angular_bias = random.uniform(-0.2, 0.2)
-                
-                return {
-                    'action': 'move_forward',
-                    'parameters': {
-                        'linear_velocity': boosted_speed * 0.5,
-                        'angular_velocity': angular_bias,
-                        'duration': 1.5
-                    },
-                    'confidence': 0.7,
-                    'reason': 'explore_cautious_forward'
-                }
-            
-            else:
-                if left_clear > right_clear:
-                    return {
-                        'action': 'rotate_left',
-                        'parameters': {
-                            'linear_velocity': boosted_speed * 0.2,
-                            'angular_velocity': self.NORMAL_TURN_SPEED,
-                            'duration': 1.2
-                        },
-                        'confidence': 0.8,
-                        'reason': 'explore_turn_left'
-                    }
-                else:
-                    return {
-                        'action': 'rotate_right',
-                        'parameters': {
-                            'linear_velocity': boosted_speed * 0.2,
-                            'angular_velocity': -self.NORMAL_TURN_SPEED,
-                            'duration': 0.8
-                        },
-                        'confidence': 0.8,
-                        'reason': 'explore_turn_right'
-                    }
+            return self._frontier_aware_exploration(vision_analysis, robot_pos)
         
         else:  # Default or unknown directive
             # Standard exploration behavior
             return self._make_navigation_decision(vision_analysis)
-    
+        
+    def _frontier_aware_exploration(
+        self,
+        vision_analysis: Dict,
+        robot_pos: Dict
+    ) -> Dict[str, any]:
+        """
+        Perform exploration with frontier detection.
+        """
+        clearances = vision_analysis.get('clearance', {})
+        obstacles = vision_analysis.get('obstacles', [])
+
+        front_clear = clearances.get('forward', 999)
+        left_clear = clearances.get('left', 999)
+        right_clear = clearances.get('right', 999)
+
+        boosted_speed = self.base_speed * self.exploration_boost
+
+        # Try to get best frontier direction (with wall detection)
+        best_frontier = None
+        if self.use_frontier_detection and robot_pos:
+            best_frontier = self.frontier_detector.get_best_frontier(robot_pos)
+
+        # Strategy 1: Valid frontier + Clear Path
+        if best_frontier and front_clear > self.SAFE_DISTANCE:
+                frontier_direction = self.frontier_detector.get_frontier_direction(best_frontier)
+                if frontier_direction == 'left':
+                    logger.info(
+                        f"[FRONTIER EXPLORE] Turning left toward frontier"
+                        f"{best_frontier.distance:.1f}m"
+                    )
+                    return {
+                        'action': 'turn_left',
+                        'parameters': {
+                            'linear_velocity': boosted_speed * 0.4,
+                            'angular_velocity': self.NORMAL_TURN_SPEED,
+                            'duration': 1.5
+                        },
+                        'confidence': 0.9,
+                        'reason': 'frontier_exploration_left'
+                    }
+                elif frontier_direction == 'right':
+                    logger.info(
+                        f"[FRONTIER EXPLORE] Turning right toward frontier"
+                        f"{best_frontier.distance:.1f}m"
+                    )
+                    return {
+                        'action': 'turn_right',
+                        'parameters': {
+                            'linear_velocity': boosted_speed * 0.4,
+                            'angular_velocity': -self.NORMAL_TURN_SPEED,
+                            'duration': 1.5
+                        },
+                        'confidence': 0.9,
+                        'reason': 'frontier_exploration_right'
+                    }
+                elif frontier_direction == 'foward':
+                    logger.info(
+                        f"[FRONTIER EXPLORE] Moving toward frontier"
+                        f"{best_frontier.distance:.2f}m ahead"
+                    )
+                    return {
+                        'action': 'move_forward',
+                        'parameters': {
+                            'linear_velocity': boosted_speed,
+                            'angular_velocity': 0.0,
+                            'duration': 2.0
+                        },
+                        'confidence': 0.85,
+                        'reason': 'frontier_exploration_forward'
+                    }
+            
+        # Strategy 2: No Frontier or Blocked → Clearance-Based
+        import random
+        if front_clear > self.SAFE_DISTANCE:
+            return {
+                'action': 'move_forward',
+                'parameters': {
+                    'linear_velocity': boosted_speed,
+                    'angular_velocity': random.uniform(-0.15, 0.15),
+                    'duration': 2.0
+                    },
+                    'confidence': 0.85,
+                    'reason': 'explore_cautious_forward'
+                }
+        elif front_clear > self.WARNING_DISTANCE:
+            if left_clear > right_clear + 0.3:
+                angular_bias = random.uniform(0.1, 0.3)
+            elif right_clear > left_clear + 0.3:
+                angular_bias = random.uniform(-0.3, -0.1)
+            else:
+                angular_bias = random.uniform(-0.2, 0.2)
+
+            return {
+                'action': 'move_forward',
+                'parameters': {
+                    'linear_velocity': boosted_speed * 0.5,
+                    'angular_velocity': angular_bias,
+                    'duration': 1.5
+                    },
+                    'confidence': 0.7,
+                    'reason': 'explore_cautious_forward'
+                }
+                        
+        else:
+            if left_clear > right_clear:
+                return {
+                    'action': 'rotate_left',
+                    'parameters': {
+                        'linear_velocity': boosted_speed * 0.2,
+                        'angular_velocity': self.NORMAL_TURN_SPEED,
+                        'duration': 1.2                        },
+                    'confidence': 0.8,
+                    'reason': 'explore_turn_left'
+                }
+            else:
+                return {
+                    'action': 'rotate_right',
+                    'parameters': {
+                        'linear_velocity': boosted_speed * 0.2,
+                        'angular_velocity': -self.NORMAL_TURN_SPEED,
+                        'duration': 0.8
+                    },
+                    'confidence': 0.8,
+                    'reason': 'explore_turn_right'
+                }
+            
     def _make_navigation_decision(
         self,
         analysis: Dict[str, any]
@@ -507,7 +575,7 @@ class NavigationReasoner:
         try:
             # Priority 3: Execute mission directive or standard navigation
             if mission_directive:
-                decision = self._execute_mission_directive(mission_directive, vision_analysis)
+                decision = self._execute_mission_directive(mission_directive, vision_analysis,robot_pos)
             else:
                 decision = self._make_navigation_decision(vision_analysis)
             

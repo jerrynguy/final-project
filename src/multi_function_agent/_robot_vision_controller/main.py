@@ -8,7 +8,7 @@ from typing import AsyncGenerator, Dict, Any, Optional, Tuple
 from multi_function_agent._robot_vision_controller.utils.log.error_handlers import ErrorHandlers
 from multi_function_agent._robot_vision_controller.utils.log.output_formatter import OutputFormatter
 from multi_function_agent._robot_vision_controller.utils.log.performance_logger import PerformanceLogger
-from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator, SafetyThresholds
 
 from multi_function_agent._robot_vision_controller.perception.slam_controller import SLAMController
 from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
@@ -137,7 +137,7 @@ async def _robot_vision_controller(
         if initial_scan:
             startup_monitor = LidarSafetyMonitor()
             min_dist = startup_monitor.get_min_distance(initial_scan)
-            if min_dist < 0.5:
+            if min_dist < SafetyThresholds.WARNING_ZONE:
                 logger.warning(f"[STARTUP] Backing away from obstacle ({min_dist:.2f}m)")
                 back_away_cmd = {
                     "action": "move_backward",

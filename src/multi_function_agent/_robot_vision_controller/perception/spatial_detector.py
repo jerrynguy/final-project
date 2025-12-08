@@ -12,6 +12,7 @@ from ultralytics import YOLO
 from typing import Dict, List, Optional
 
 from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
 
 try:
     from sensor_msgs.msg import LaserScan
@@ -58,16 +59,14 @@ class SpatialDetector:
         self.frame_skip = 1
         self._frame_counter = 0
         self._last_result = None
+
+        self.thresholds = SafetyThresholds
         
         # LiDAR configuration
         self.use_lidar = True
         self.lidar_max_range = 3.5
-        self.lidar_min_range = 0.12
-        self.lidar_critical_distance = self.safety_validator.EMERGENCY_DISTANCE
-        self.lidar_warning_distance = self.safety_validator.WARNING_DISTANCE
-        
-        # Navigation thresholds
-        self.safe_distance_threshold = self.safety_validator.SAFE_DISTANCE
+        self.lidar_min_range = self.thresholds.HARDWARE_LIMIT  # 0.12m
+
 
     def get_full_lidar_scan(self, scan_msg: LaserScan) -> Dict[int, float]:
         """
@@ -191,9 +190,9 @@ class SpatialDetector:
                 angle = closest['angle']
                 
                 # Determine threat level
-                if distance < self.lidar_critical_distance:
+                if distance < self.thresholds.CRITICAL_ABORT:
                     threat = 'high'
-                elif distance < self.lidar_warning_distance:
+                elif distance < self.thresholds.WARNING_ZONE:
                     threat = 'medium'
                 else:
                     threat = 'low'
@@ -292,9 +291,9 @@ class SpatialDetector:
             'map_info': {},
             'exploration_frontiers': [],
             'clearances': {
-                'forward': self.lidar_critical_distance,
-                'left': self.lidar_critical_distance,
-                'right': self.lidar_critical_distance
+                'forward': self.thresholds.CRITICAL_ABORT,
+                'left': self.thresholds.CRITICAL_ABORT,
+                'right': self.thresholds.CRITICAL_ABORT
             }
         }
     
@@ -319,7 +318,7 @@ class SpatialDetector:
             clearances = self._calculate_clearances_from_lidar(lidar_obstacles)
 
             # FIXED THRESHOLD: Always use safe_distance (1.0m)
-            adaptive_threshold = self.safe_distance_threshold  # Always 1.0m
+            adaptive_threshold = self.thresholds.SAFE_ZONE  # 1.5m
             logger.info(f"[THRESHOLD] Using fixed threshold {adaptive_threshold:.2f}m")
 
             # Nav2 handles direction finding - just use default

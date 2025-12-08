@@ -16,6 +16,73 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# GLOBAL SAFETY THRESHOLDS (Single Source of Truth)
+# =============================================================================
+
+class SafetyThresholds:
+    """
+    Centralized distance thresholds for all safety systems.
+    
+    ⚠️ CRITICAL: All modules must import from here - no local overrides!
+    """
+    
+    # =========================================================================
+    # Hardware & Critical Abort Thresholds
+    # =========================================================================
+    HARDWARE_LIMIT = 0.12           # Physical collision distance (never breach)
+    CRITICAL_ABORT = 0.20           # Emergency backup trigger (360°)
+    CRITICAL_ABORT_FRONT = 0.20     # Frontal critical (narrower arc)
+    CRITICAL_ABORT_SIDE = 0.15      # Side obstacle warning (wider tolerance)
+    RESUME_SAFE = 0.35              # Hysteresis resume threshold
+    
+    # =========================================================================
+    # Navigation Safety Zones
+    # =========================================================================
+    WARNING_ZONE = 0.50             # Start slowing down
+    CAUTION_ZONE = 1.00             # Reduce speed significantly  
+    SAFE_ZONE = 1.50                # Normal operation speed
+    
+    # =========================================================================
+    # Directional Arc Definitions (for smart abort logic)
+    # =========================================================================
+    FRONT_ARC_HALF_ANGLE = 60       # ±60° = 120° frontal cone
+    SIDE_ARC_HALF_ANGLE = 90        # ±90° = 180° side awareness
+    
+    # =========================================================================
+    # Velocity Limits
+    # =========================================================================
+    MAX_SAFE_LINEAR_VEL = 0.6
+    MAX_SAFE_ANGULAR_VEL = 2.5
+    
+    @classmethod
+    def get_critical_distance_for_direction(cls, angle_deg: float, is_moving_forward: bool) -> float:
+        """
+        Get critical distance based on obstacle angle and movement direction.
+        
+        Args:
+            angle_deg: Obstacle angle in degrees (-180 to 180, 0=front)
+            is_moving_forward: True if robot moving forward
+            
+        Returns:
+            float: Critical distance threshold for this angle
+        """
+        abs_angle = abs(angle_deg)
+        
+        if is_moving_forward:
+            # Forward movement: strict front, lenient sides
+            if abs_angle <= cls.FRONT_ARC_HALF_ANGLE:
+                return cls.CRITICAL_ABORT_FRONT  # 0.20m in front ±60°
+            else:
+                return cls.CRITICAL_ABORT_SIDE   # 0.15m on sides (only emergency)
+        else:
+            # Turning/stopped: check wider arc
+            if abs_angle <= cls.SIDE_ARC_HALF_ANGLE:
+                return cls.CRITICAL_ABORT_FRONT  # 0.20m in front ±90°
+            else:
+                return cls.CRITICAL_ABORT_SIDE   # 0.15m behind
+
+
+# =============================================================================
 # Safety Result Data Structure
 # =============================================================================
 
@@ -36,36 +103,52 @@ class SafetyResult:
 class SafetyValidator:
     """
     Validates robot commands against safety constraints.
+    Uses centralized SafetyThresholds.
     """
     
     def __init__(self):
-        """Initialize safety validator with default thresholds."""
-        # Distance thresholds (meters)
-        self.EMERGENCY_DISTANCE = 0.15   # Hardware limit - NEVER touch
-        self.CRITICAL_DISTANCE_EXPLORE = 0.3   # Explore mode
-        self.CRITICAL_DISTANCE_PATROL = 0.25    # Patrol mode (trust Nav2)
-        self.CAUTION_DISTANCE = 1.0     # Start slowing down
-        self.AWARE_DISTANCE = 1.5       # Normal operation
-        
-        # Velocity limits
-        self.MAX_SAFE_LINEAR_VEL = 0.6
-        self.MAX_SAFE_ANGULAR_VEL = 2.5
+        """Initialize safety validator with centralized thresholds."""
+        # CHANGED: Reference centralized thresholds instead of local copies
+        self.thresholds = SafetyThresholds
         
         # Statistics tracking
         self.total_checks = 0
         self.unsafe_detections = 0
 
+    # CHANGED: Properties now reference SafetyThresholds
+    @property
+    def EMERGENCY_DISTANCE(self):
+        return self.thresholds.HARDWARE_LIMIT
+    
     @property
     def CRITICAL_DISTANCE(self):
-        return self.CRITICAL_DISTANCE_EXPLORE  # Default to explore
+        return self.thresholds.CRITICAL_ABORT
+    
+    @property
+    def CRITICAL_DISTANCE_EXPLORE(self):
+        # REMOVED: No mode-specific overrides
+        return self.thresholds.CRITICAL_ABORT
+    
+    @property
+    def CRITICAL_DISTANCE_PATROL(self):
+        # REMOVED: No mode-specific overrides
+        return self.thresholds.CRITICAL_ABORT
 
     @property  
     def WARNING_DISTANCE(self):
-        return self.CAUTION_DISTANCE
+        return self.thresholds.CAUTION_ZONE
 
     @property
     def SAFE_DISTANCE(self):
-        return self.AWARE_DISTANCE
+        return self.thresholds.SAFE_ZONE
+    
+    @property
+    def MAX_SAFE_LINEAR_VEL(self):
+        return self.thresholds.MAX_SAFE_LINEAR_VEL
+    
+    @property
+    def MAX_SAFE_ANGULAR_VEL(self):
+        return self.thresholds.MAX_SAFE_ANGULAR_VEL
     
     def validate_movement_command(self, movement_decision: Dict[str, Any]) -> bool:
         """
@@ -152,9 +235,9 @@ def validate_robot_command_safety(twist: Twist, config: Dict[str, Any]) -> bool:
         linear_x = twist.linear.x
         angular_z = twist.angular.z
         
-        # Get limits from config
-        max_linear = config.get('max_linear_velocity', 0.62)
-        max_angular = config.get('max_angular_velocity', 3.84)
+        # CHANGED: Use centralized thresholds
+        max_linear = config.get('max_linear_velocity', SafetyThresholds.MAX_SAFE_LINEAR_VEL)
+        max_angular = config.get('max_angular_velocity', SafetyThresholds.MAX_SAFE_ANGULAR_VEL)
         
         # Check for NaN/Inf
         if not math.isfinite(linear_x) or not math.isfinite(angular_z):
@@ -201,12 +284,13 @@ def is_velocity_safe(linear_vel: float, angular_vel: float) -> bool:
 def get_recommended_speed_multiplier(min_obstacle_distance: float) -> float:
     """
     Calculate speed multiplier based on obstacle proximity.
+    CHANGED: Use centralized thresholds
     """
-    if min_obstacle_distance < 0.25:
+    if min_obstacle_distance < SafetyThresholds.CRITICAL_ABORT:
         return 0.0
-    elif min_obstacle_distance < 0.4:
+    elif min_obstacle_distance < SafetyThresholds.WARNING_ZONE:
         return 0.3
-    elif min_obstacle_distance < 0.6:
+    elif min_obstacle_distance < SafetyThresholds.CAUTION_ZONE:
         return 0.6
     else:
         return 1.0

@@ -21,6 +21,7 @@ try:
     from nav_msgs.msg import OccupancyGrid
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
     from tf_transformations import euler_from_quaternion
+    from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
     
     ROS_AVAILABLE = True
     
@@ -171,6 +172,9 @@ class RobotControllerInterface(Node):
         self._robot_status = RobotStatus()
         self.is_connected = False
         self._last_command_time = 0
+
+        self._current_linear_vel = 0.0
+        self._current_angular_vel = 0.0
         
         logger.info("Robot controller initialized with native ROS2")
 
@@ -351,7 +355,7 @@ class RobotControllerInterface(Node):
         
         min_dist = safety_monitor.get_min_distance(lidar_to_check)
         
-        if min_dist < safety_monitor.CRITICAL_DISTANCE - 0.03:
+        if min_dist < SafetyThresholds.CRITICAL_ABORT:
             logger.error(f"[ABORT NAV2] Obstacle at {min_dist:.2f}m")
             self.cancel_nav2_navigation()
             return False
@@ -439,7 +443,7 @@ class RobotControllerInterface(Node):
     async def _send_command(self, twist: Twist, duration: float) -> bool:
         """
         Execute command with SINGLE critical abort check.
-        No velocity scaling - trust Nav2 or manual decision.
+        CHANGED: Now updates safety monitor with movement direction.
         """
         try:
             logger.info(
@@ -455,14 +459,22 @@ class RobotControllerInterface(Node):
             from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
             safety_monitor = LidarSafetyMonitor()
             
+            # ADDED: Update safety monitor with current movement direction
+            safety_monitor.update_movement_state(twist.linear.x, twist.angular.z)
+            
+            # ADDED: Track movement for directional checks
+            self._current_linear_vel = twist.linear.x
+            self._current_angular_vel = twist.angular.z
+            
             for i in range(max(1, iterations)):
-                # ONLY check critical distance (no scaling)
+                # ONLY check critical distance (now with directional awareness)
                 if self.lidar_data is not None:
                     abort_result = safety_monitor.check_critical_abort(self.lidar_data)
                     
                     if abort_result['abort']:
                         logger.error(
-                            f"[ABORT] Critical distance {abort_result['min_distance']:.3f}m"
+                            f"[ABORT] Critical distance {abort_result['min_distance']:.3f}m "
+                            f"at {abort_result.get('obstacle_angle', 'N/A')}°"
                         )
                         # Execute emergency backup
                         backup_cmd = abort_result['command']
@@ -486,7 +498,7 @@ class RobotControllerInterface(Node):
                 self.ros_node.publish_stop()
                 await asyncio.sleep(0.01)
             return False
-
+        
     async def _emergency_stop(self) -> bool:
         try:
             self.ros_node.publish_stop()
