@@ -65,6 +65,34 @@ class LidarSafetyMonitor:
         
         return should_abort
     
+    # =========================================================================
+    # Command Generators (MOVED UP to fix "method not found" error)
+    # =========================================================================
+    
+    def _emergency_stop(self) -> Dict:
+        """Generate emergency stop command."""
+        return {
+            'action': 'stop',
+            'parameters': {
+                'linear_velocity': 0.0,
+                'angular_velocity': 0.0,
+                'duration': 0.1
+            },
+            'reason': 'emergency_stop'
+        }
+    
+    def _pause_command(self) -> Dict:
+        """Generate brief pause command during cooldown."""
+        return {
+            'action': 'stop',
+            'parameters': {
+                'linear_velocity': 0.0,
+                'angular_velocity': 0.0,
+                'duration': 0.3
+            },
+            'reason': 'cooldown_pause'
+        }
+    
     def check_critical_abort(self, lidar_data) -> Dict:
         """
         Check for critical distance with smart directional logic and recovery.
@@ -276,24 +304,45 @@ class LidarSafetyMonitor:
     # =========================================================================
     # Command Generators
     # =========================================================================
-    
     def _smart_recovery_command(self, obstacle_angle: float, clearances: Dict) -> Dict:
         """
         Generate smart recovery command that turns toward open space.
         
         Strategy:
-        1. Compare left vs right clearances
-        2. Turn toward more open side while backing up
-        3. If equal, turn away from obstacle angle
+        1. Check if robot is in tight corner (both sides blocked)
+        2. If yes: straight backup only (no rotation)
+        3. If no: turn toward more open side while backing up
         """
         left_clear = clearances.get('left', 0)
         right_clear = clearances.get('right', 0)
         
+        # Phát hiện góc chật - cần ít nhất 30cm một bên để xoay an toàn
+        MIN_SAFE_CLEARANCE = 0.30  # 30cm minimum to safely turn
+        
+        if left_clear < MIN_SAFE_CLEARANCE and right_clear < MIN_SAFE_CLEARANCE:
+            # CORNER SITUATION: Both sides blocked - DON'T rotate!
+            logger.warning(
+                f"[TIGHT CORNER DETECTED] Left: {left_clear:.2f}m, Right: {right_clear:.2f}m "
+                f"→ STRAIGHT BACKUP ONLY (no rotation)"
+            )
+            return {
+                'action': 'minimal_recovery',
+                'parameters': {
+                    'linear_velocity': -0.15,  # Gentle straight backup
+                    'angular_velocity': 0.0,   # NO rotation in tight space
+                    'duration': 0.8            # Shorter duration
+                },
+                'reason': 'tight_corner_minimal_recovery'
+            }
+        
+        # CHANGED: Có đủ không gian để xoay - dùng logic thông minh
+        clearance_diff = left_clear - right_clear
+        
         # Decision: Turn toward more open side
-        if left_clear > right_clear + 0.2:
+        if clearance_diff > 0.2:
             angular = 0.7  # Strong left turn
             direction = "left"
-        elif right_clear > left_clear + 0.2:
+        elif clearance_diff < -0.2:
             angular = -0.7  # Strong right turn
             direction = "right"
         else:
@@ -309,35 +358,11 @@ class LidarSafetyMonitor:
         return {
             'action': 'smart_recovery',
             'parameters': {
-                'linear_velocity': -0.25,  # Gentle backup
+                'linear_velocity': -0.20,  # CHANGED: Reduced from -0.25 (gentler)
                 'angular_velocity': angular,  # Turn toward open space
-                'duration': 1.2  # Time to clear and turn
+                'duration': 1.0  # CHANGED: Reduced from 1.2 (less rotation)
             },
             'reason': f'smart_recovery_{direction}'
-        }
-    
-    def _emergency_stop(self) -> Dict:
-        """Generate emergency stop command."""
-        return {
-            'action': 'stop',
-            'parameters': {
-                'linear_velocity': 0.0,
-                'angular_velocity': 0.0,
-                'duration': 0.1
-            },
-            'reason': 'emergency_stop'
-        }
-    
-    def _pause_command(self) -> Dict:
-        """Generate brief pause command during cooldown."""
-        return {
-            'action': 'stop',
-            'parameters': {
-                'linear_velocity': 0.0,
-                'angular_velocity': 0.0,
-                'duration': 0.3
-            },
-            'reason': 'cooldown_pause'
         }
     
     # =========================================================================

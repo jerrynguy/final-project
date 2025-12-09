@@ -33,7 +33,7 @@ class SafetyThresholds:
     CRITICAL_ABORT = 0.20           # Emergency backup trigger (360°)
     CRITICAL_ABORT_FRONT = 0.20     # Frontal critical (narrower arc)
     CRITICAL_ABORT_SIDE = 0.15      # Side obstacle warning (wider tolerance)
-    RESUME_SAFE = 0.35              # Hysteresis resume threshold
+    RESUME_SAFE = 0.5               # Hysteresis resume threshold
     
     # =========================================================================
     # Navigation Safety Zones

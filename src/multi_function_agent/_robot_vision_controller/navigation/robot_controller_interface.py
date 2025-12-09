@@ -11,6 +11,8 @@ from enum import Enum
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
+import numpy as np
+
 try:
     import rclpy
     from rclpy.node import Node
@@ -442,8 +444,8 @@ class RobotControllerInterface(Node):
 
     async def _send_command(self, twist: Twist, duration: float) -> bool:
         """
-        Execute command with SINGLE critical abort check.
-        CHANGED: Now updates safety monitor with movement direction.
+        Execute command with SINGLE critical abort check + RECOVERY MONITORING.
+        CHANGED: Now monitors for NEW collisions during recovery (backing up).
         """
         try:
             logger.info(
@@ -466,9 +468,34 @@ class RobotControllerInterface(Node):
             self._current_linear_vel = twist.linear.x
             self._current_angular_vel = twist.angular.z
             
+            # CHANGED: Detect if this is a recovery command (backing up)
+            is_recovery = twist.linear.x < 0
+            if is_recovery:
+                logger.debug("[RECOVERY MODE] Monitoring for backward collisions")
+            
             for i in range(max(1, iterations)):
                 # ONLY check critical distance (now with directional awareness)
                 if self.lidar_data is not None:
+                    # CHANGED: During recovery, check for MINIMUM distance collisions
+                    if is_recovery:
+                        min_dist = min(
+                            (r for r in self.lidar_data.ranges 
+                             if not (np.isnan(r) or np.isinf(r))),
+                            default=float('inf')
+                        )
+                        
+                        # CRITICAL: If backed into wall (at sensor minimum), STOP IMMEDIATELY
+                        if min_dist <= 0.125:  # 0.120m + 5mm tolerance
+                            logger.error(
+                                f"[RECOVERY ABORT] Backed into wall at {min_dist:.3f}m - STOPPING"
+                            )
+                            # Emergency stop
+                            for _ in range(10):
+                                self.ros_node.publish_stop()
+                                await asyncio.sleep(0.01)
+                            return False
+                    
+                    # Standard forward movement checks
                     abort_result = safety_monitor.check_critical_abort(self.lidar_data)
                     
                     if abort_result['abort']:
