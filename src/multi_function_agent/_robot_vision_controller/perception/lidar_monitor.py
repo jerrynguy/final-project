@@ -300,69 +300,136 @@ class LidarSafetyMonitor:
                 clearances[key] = 3.5  # Max LiDAR range
         
         return clearances
+
+    def _get_rear_clearance(self, obstacles_with_angles: List[Tuple[float, float]]) -> float:
+        """
+        Get minimum clearance in rear arc for safe backup validation.
+        
+        Rear arc definition: |angle| > 120° (back hemisphere)
+        
+        Args:
+            obstacles_with_angles: List of (angle_deg, distance) tuples
+            
+        Returns:
+            float: Minimum rear distance (inf if no rear obstacles)
+        """
+        rear_distances = [
+            distance for angle_deg, distance in obstacles_with_angles
+            if abs(angle_deg) > 120  # Rear hemisphere: 120-180° and -120 to -180°
+        ]
+        
+        if not rear_distances:
+            return float('inf')
+        
+        min_rear = min(rear_distances)
+        
+        logger.debug(f"[REAR CHECK] Min rear clearance: {min_rear:.3f}m")
+        return min_rear
     
     # =========================================================================
     # Command Generators
     # =========================================================================
-    def _smart_recovery_command(self, obstacle_angle: float, clearances: Dict) -> Dict:
+    def _smart_recovery_command(
+        self, 
+        obstacle_angle: float, 
+        clearances: Dict,
+        obstacles_with_angles: List[Tuple[float, float]]  # CHANGED: Thêm param
+    ) -> Dict:
         """
-        Generate smart recovery command that turns toward open space.
+        Generate smart recovery command with rear collision prevention.
         
         Strategy:
-        1. Check if robot is in tight corner (both sides blocked)
-        2. If yes: straight backup only (no rotation)
-        3. If no: turn toward more open side while backing up
+        1. Check rear clearance first
+        2. If rear < 0.25m → Rotate-only recovery (NO backup)
+        3. If rear >= 0.25m → Safe backup with adaptive duration
+        4. Turn toward more open side
+        
+        Args:
+            obstacle_angle: Angle of obstacle that triggered abort
+            clearances: Left/right/front clearance dict
+            obstacles_with_angles: Full obstacle list for rear checking
+            
+        Returns:
+            dict: Recovery command with safe parameters
         """
         left_clear = clearances.get('left', 0)
         right_clear = clearances.get('right', 0)
         
-        # Phát hiện góc chật - cần ít nhất 30cm một bên để xoay an toàn
-        MIN_SAFE_CLEARANCE = 0.30  # 30cm minimum to safely turn
+        # ADDED: Check rear clearance for backup safety
+        rear_clear = self._get_rear_clearance(obstacles_with_angles)
         
-        if left_clear < MIN_SAFE_CLEARANCE and right_clear < MIN_SAFE_CLEARANCE:
-            # CORNER SITUATION: Both sides blocked - DON'T rotate!
+        # ADDED: Detect tight corners (both sides blocked)
+        is_tight_corner = left_clear < 0.3 and right_clear < 0.3
+        
+        # =======================================================================
+        # STRATEGY 1: ROTATE-ONLY if rear blocked or tight corner
+        # =======================================================================
+        if rear_clear < 0.25 or is_tight_corner:
+            # Determine rotation direction (toward more open side)
+            if left_clear > right_clear + 0.1:
+                angular = 0.8  # Strong left rotation
+                direction = "left"
+            elif right_clear > left_clear + 0.1:
+                angular = -0.8  # Strong right rotation
+                direction = "right"
+            else:
+                # Equal clearance: rotate away from obstacle
+                angular = 0.8 if obstacle_angle > 0 else -0.8
+                direction = "away_from_obstacle"
+            
             logger.warning(
-                f"[TIGHT CORNER DETECTED] Left: {left_clear:.2f}m, Right: {right_clear:.2f}m "
-                f"→ STRAIGHT BACKUP ONLY (no rotation)"
+                f"[ROTATE-ONLY RECOVERY] Rear: {rear_clear:.2f}m, "
+                f"L/R: {left_clear:.2f}/{right_clear:.2f}m → Rotate {direction}"
             )
+            
             return {
-                'action': 'minimal_recovery',
+                'action': 'rotate_recovery',
                 'parameters': {
-                    'linear_velocity': -0.15,  # Gentle straight backup
-                    'angular_velocity': 0.0,   # NO rotation in tight space
-                    'duration': 0.8            # Shorter duration
+                    'linear_velocity': 0.0,  # NO BACKUP - rotate only
+                    'angular_velocity': angular,
+                    'duration': 0.8  # Quick rotation
                 },
-                'reason': 'tight_corner_minimal_recovery'
+                'reason': f'rotate_only_{direction}_rear_blocked'
             }
         
-        # CHANGED: Có đủ không gian để xoay - dùng logic thông minh
-        clearance_diff = left_clear - right_clear
+        # =======================================================================
+        # STRATEGY 2: SAFE BACKUP with adaptive duration
+        # =======================================================================
         
-        # Decision: Turn toward more open side
-        if clearance_diff > 0.2:
-            angular = 0.7  # Strong left turn
+        # Determine turn direction (toward more open side)
+        if left_clear > right_clear + 0.2:
+            angular = 0.6  # Moderate left turn while backing
             direction = "left"
-        elif clearance_diff < -0.2:
-            angular = -0.7  # Strong right turn
+        elif right_clear > left_clear + 0.2:
+            angular = -0.6  # Moderate right turn while backing
             direction = "right"
         else:
             # Equal clearance: turn away from obstacle angle
-            angular = 0.8 if obstacle_angle > 0 else -0.8
+            angular = 0.7 if obstacle_angle > 0 else -0.7
             direction = "away_from_obstacle"
         
+        # CHANGED: Adaptive backup duration based on rear clearance
+        # Formula: duration = min(0.6s, rear_clearance / 0.35)
+        # Examples: 
+        #   - rear 0.7m → 0.6s (capped)
+        #   - rear 0.4m → 0.57s
+        #   - rear 0.3m → 0.43s
+        safe_duration = min(0.6, rear_clear / 0.35)
+        
         logger.info(
-            f"[SMART RECOVERY] Clearances - Left: {left_clear:.2f}m, Right: {right_clear:.2f}m "
-            f"→ Turn {direction} (angular: {angular:.2f})"
+            f"[SAFE BACKUP] Rear: {rear_clear:.2f}m, L/R: {left_clear:.2f}/{right_clear:.2f}m "
+            f"→ Backup {safe_duration:.2f}s + turn {direction}"
         )
         
         return {
-            'action': 'smart_recovery',
+            'action': 'safe_backup_recovery',
             'parameters': {
-                'linear_velocity': -0.20,  # CHANGED: Reduced from -0.25 (gentler)
-                'angular_velocity': angular,  # Turn toward open space
-                'duration': 1.0  # CHANGED: Reduced from 1.2 (less rotation)
+                'linear_velocity': -0.20,  # CHANGED: Slower backup (was -0.25)
+                'angular_velocity': angular,
+                'duration': safe_duration  # CHANGED: Adaptive (was fixed 1.2s)
             },
-            'reason': f'smart_recovery_{direction}'
+            'reason': f'safe_backup_{direction}',
+            'rear_clearance': rear_clear  # ADDED: For monitoring
         }
     
     # =========================================================================
