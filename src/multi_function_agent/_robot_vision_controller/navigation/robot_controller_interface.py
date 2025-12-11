@@ -494,6 +494,19 @@ class RobotControllerInterface(Node):
                                 self.ros_node.publish_stop()
                                 await asyncio.sleep(0.01)
                             return False
+                        
+                        if twist.linear.x <0:
+                            rear_min = self._check_rear_clearance_during_backup(self.lidar_data)
+
+                            if rear_min is not None and rear_min < SafetyThresholds.CRITICAL_ABORT:
+                                logger.error(
+                                    f"[RECOVERY ABORT] Obstacle at rear {rear_min:.3f}m during backup"
+                                )
+                                # Emergency stop
+                                for _ in range(5):
+                                    self.ros_node.publish_stop()
+                                    await asyncio.sleep(0.01)
+                                return False
                     
                     # Standard forward movement checks
                     abort_result = safety_monitor.check_critical_abort(self.lidar_data)
@@ -525,6 +538,58 @@ class RobotControllerInterface(Node):
                 self.ros_node.publish_stop()
                 await asyncio.sleep(0.01)
             return False
+
+    def _check_rear_clearance_during_backup(self, lidar_data) -> Optional[float]:
+        """
+        Check rear hemisphere clearance during backup maneuvers.
+        
+        Only called when robot is actively backing up (linear_velocity < 0).
+        
+        Args:
+            lidar_data: Current LIDAR scan
+            
+        Returns:
+            float: Minimum rear distance, or None if no valid readings
+        """
+        if lidar_data is None:
+            return None
+        
+        try:
+            ranges = lidar_data.ranges
+            angle_min = lidar_data.angle_min
+            angle_increment = lidar_data.angle_increment
+            
+            rear_distances = []
+            
+            for i, distance in enumerate(ranges):
+                if np.isnan(distance) or np.isinf(distance):
+                    continue
+                
+                # Calculate angle
+                angle_rad = angle_min + (i * angle_increment)
+                angle_deg = np.degrees(angle_rad)
+                
+                # Normalize to [-180, 180]
+                while angle_deg > 180:
+                    angle_deg -= 360
+                while angle_deg < -180:
+                    angle_deg += 360
+                
+                # Rear arc: |angle| > 120°
+                if abs(angle_deg) > 120:
+                    rear_distances.append(distance)
+            
+            if not rear_distances:
+                return None
+            
+            min_rear = min(rear_distances)
+            
+            logger.debug(f"[BACKUP MONITOR] Rear: {min_rear:.3f}m")
+            return min_rear
+            
+        except Exception as e:
+            logger.error(f"Rear check failed: {e}")
+            return None
         
     async def _emergency_stop(self) -> bool:
         try:

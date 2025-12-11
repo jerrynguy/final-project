@@ -146,7 +146,11 @@ class LidarSafetyMonitor:
                     
                     return {
                         'abort': True,
-                        'command': self._smart_recovery_command(angle, clearances),
+                        'command': self._smart_recovery_command(
+                            angle, 
+                            clearances, 
+                            obstacles_with_angles
+                        ),
                         'min_distance': distance,
                         'obstacle_angle': angle,
                         'clearances': clearances,
@@ -268,10 +272,7 @@ class LidarSafetyMonitor:
     
     def _analyze_clearances(self, obstacles_with_angles: List[Tuple[float, float]]) -> Dict:
         """
-        Analyze clearance in left/right/front directions.
-        
-        Returns:
-            dict: {'front': distance, 'left': distance, 'right': distance}
+        Analyze clearance distances in each direction.
         """
         clearances = {
             'front': float('inf'),

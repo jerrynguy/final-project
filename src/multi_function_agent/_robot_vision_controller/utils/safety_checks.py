@@ -53,6 +53,18 @@ class SafetyThresholds:
     # =========================================================================
     MAX_SAFE_LINEAR_VEL = 0.6
     MAX_SAFE_ANGULAR_VEL = 2.5
+
+    # =========================================================================
+    # Rear Arc Safety Thresholds
+    # =========================================================================
+    REAR_ARC_ANGLE = 120            # Degrees - rear arc starts at ±120°
+    MIN_SAFE_BACKUP_CLEARANCE = 0.25  # Meters - min rear distance to allow backup
+    BACKUP_ABORT_THRESHOLD = 0.20   # Meters - emergency stop during backup
+    
+    # =========================================================================
+    # Recovery Behavior Thresholds
+    # =========================================================================
+    TIGHT_CORNER_THRESHOLD = 0.3    # If both L/R < 0.3m → tight corner (rotate-only)
     
     @classmethod
     def get_critical_distance_for_direction(cls, angle_deg: float, is_moving_forward: bool) -> float:
