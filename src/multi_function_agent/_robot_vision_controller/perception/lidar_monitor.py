@@ -46,14 +46,28 @@ class LidarSafetyMonitor:
         """Check if robot is primarily moving forward (not turning)."""
         return (abs(self.last_linear_velocity) > 0.1 and 
                 abs(self.last_angular_velocity) < 0.3)
-    
+
     def _should_abort_for_obstacle(self, angle_deg: float, distance: float) -> bool:
-        """Smart abort decision based on obstacle angle and movement direction."""
+        """
+        Smart abort decision based on obstacle angle and movement direction.
+        
+        CHANGED: Stricter threshold - only abort if REALLY dangerous.
+        """
         is_forward = self._is_moving_forward()
         
-        critical_threshold = self.thresholds.get_critical_distance_for_direction(
-            angle_deg, is_forward
-        )
+        # CHANGED: More conservative abort thresholds
+        if is_forward:
+            # Moving forward: only abort if obstacle directly in path
+            if abs(angle_deg) <= 45:  # Front arc
+                critical_threshold = 0.22  # INCREASED from 0.20m
+            else:  # Side/rear
+                critical_threshold = 0.15  # Keep strict for sides
+        else:
+            # Turning/stopped: check wider arc
+            if abs(angle_deg) <= 90:
+                critical_threshold = 0.20
+            else:
+                critical_threshold = 0.15
         
         should_abort = distance < critical_threshold
         
@@ -143,6 +157,17 @@ class LidarSafetyMonitor:
                     
                     # CHANGED: Smart recovery with clearance analysis
                     clearances = self._analyze_clearances(obstacles_with_angles)
+
+                    # ADDED: Check if this is a dead-end situation
+                    rear_clear = self._get_rear_clearance(obstacles_with_angles)
+                    is_dead_end = self._is_dead_end(clearances, rear_clear)
+
+                    # ADDED: Extend cooldown for dead-end to prevent oscillation
+                    if is_dead_end:
+                        self.cooldown_duration = 3.0  # Longer cooldown (was 2.0s)
+                        logger.warning("[DEAD-END] Extended cooldown to 3.0s")
+                    else:
+                        self.cooldown_duration = 2.0  # Normal cooldown
                     
                     return {
                         'abort': True,
@@ -326,6 +351,89 @@ class LidarSafetyMonitor:
         
         logger.debug(f"[REAR CHECK] Min rear clearance: {min_rear:.3f}m")
         return min_rear
+
+    def _is_dead_end(self, clearances: Dict, rear_clear: float) -> bool:
+        """
+        Detect if robot is trapped in dead-end corner.
+        
+        Dead-end criteria: ALL sides blocked within critical distance.
+        
+        Args:
+            clearances: Front/left/right clearance dict
+            rear_clear: Rear clearance distance
+            
+        Returns:
+            bool: True if robot is in dead-end situation
+        """
+        DEAD_END_THRESHOLD = 0.18  # Stricter than normal abort (0.20m)
+        
+        front = clearances.get('front', float('inf'))
+        left = clearances.get('left', float('inf'))
+        right = clearances.get('right', float('inf'))
+        
+        # All 4 sides blocked
+        all_sides_blocked = (
+            front < DEAD_END_THRESHOLD and
+            left < DEAD_END_THRESHOLD and
+            right < DEAD_END_THRESHOLD and
+            rear_clear < DEAD_END_THRESHOLD
+        )
+        
+        if all_sides_blocked:
+            logger.error(
+                f"[DEAD-END DETECTED] F:{front:.2f} L:{left:.2f} "
+                f"R:{right:.2f} Rear:{rear_clear:.2f} - ALL < {DEAD_END_THRESHOLD}m"
+            )
+            return True
+        
+        return False
+
+
+    def _emergency_extraction_command(self, clearances: Dict) -> Dict:
+        """
+        Generate emergency extraction command for dead-end situations.
+        
+        Strategy: Gentle rotation toward least-blocked direction.
+        Much slower than normal recovery to avoid oscillation.
+        
+        Args:
+            clearances: Current clearance dict
+            
+        Returns:
+            dict: Gentle extraction command
+        """
+        left = clearances.get('left', 0)
+        right = clearances.get('right', 0)
+        front = clearances.get('front', 0)
+        
+        # Find least-blocked direction
+        max_clear = max(left, right, front)
+        
+        if max_clear == left:
+            angular = 0.4  # GENTLE left rotation
+            direction = "left"
+        elif max_clear == right:
+            angular = -0.4  # GENTLE right rotation
+            direction = "right"
+        else:
+            # Front is best - try slight rotation to find opening
+            angular = 0.4 if left > right else -0.4
+            direction = "wiggle"
+        
+        logger.warning(
+            f"[EMERGENCY EXTRACTION] Gentle rotate {direction} "
+            f"(max clearance: {max_clear:.2f}m)"
+        )
+        
+        return {
+            'action': 'emergency_extraction',
+            'parameters': {
+                'linear_velocity': 0.0,  # Pure rotation
+                'angular_velocity': angular,
+                'duration': 0.4  # SHORT duration to check result
+            },
+            'reason': f'dead_end_extraction_{direction}'
+        }
     
     # =========================================================================
     # Command Generators
@@ -338,30 +446,21 @@ class LidarSafetyMonitor:
     ) -> Dict:
         """
         Generate smart recovery command with rear collision prevention.
-        
-        Strategy:
-        1. Check rear clearance first
-        2. If rear < 0.25m → Rotate-only recovery (NO backup)
-        3. If rear >= 0.25m → Safe backup with adaptive duration
-        4. Turn toward more open side
-        
-        Args:
-            obstacle_angle: Angle of obstacle that triggered abort
-            clearances: Left/right/front clearance dict
-            obstacles_with_angles: Full obstacle list for rear checking
-            
-        Returns:
-            dict: Recovery command with safe parameters
         """
         left_clear = clearances.get('left', 0)
         right_clear = clearances.get('right', 0)
         
-        # ADDED: Check rear clearance for backup safety
+        # Check rear clearance for backup safety
         rear_clear = self._get_rear_clearance(obstacles_with_angles)
         
-        # ADDED: Detect tight corners (both sides blocked)
+        # Detect tight corners (both sides blocked)
         is_tight_corner = left_clear < 0.3 and right_clear < 0.3
-        
+
+        # PRIORITY 0: Dead-end detection (all sides critically blocked)
+        # =======================================================
+        if self._is_dead_end(clearances, rear_clear):
+            return self._emergency_extraction_command(clearances)
+    
         # =======================================================================
         # STRATEGY 1: ROTATE-ONLY if rear blocked or tight corner
         # =======================================================================

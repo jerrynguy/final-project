@@ -70,6 +70,311 @@ class NavigationReasoner:
         self. frontier_detector = FrontierDetector()    
         self.use_frontier_detection = True
 
+        # Track position history for stuck detection
+        self.position_history = []  # List of (x, y, timestamp)
+        self.last_angular_sign = 0  # Track turn direction
+        self.same_turn_duration = 0.0  # How long turning same direction
+        self.orbit_detected = False
+        self.orbit_escape_until = 0.0  # Timestamp until which we force straight
+
+    def _get_navigation_zone(self, front_clear: float) -> int:
+        """
+        Determine navigation zone based on front clearance.
+        
+        Zones:
+        - Zone 3 (FAR): 0.7m+ → Normal forward movement
+        - Zone 2 (MEDIUM): 0.3-0.7m → Slow + aggressive steering
+        - Zone 1 (CRITICAL): <0.3m → Stop/rotate/backup decision
+        
+        Args:
+            front_clear: Front clearance distance
+            
+        Returns:
+            int: Zone number (1, 2, or 3)
+        """
+        if front_clear >= 0.7:
+            return 3  # FAR - normal speed
+        elif front_clear >= 0.3:
+            return 2  # MEDIUM - slow + steer
+        else:
+            return 1  # CRITICAL - stop/rotate
+
+    def _update_position_history(self, robot_pos: Optional[Dict]):
+        """
+        Track robot position history for stuck detection.
+        
+        Args:
+            robot_pos: Current robot position {x, y, theta}
+        """
+        if robot_pos is None:
+            return
+        
+        current_time = time.time()
+        
+        # Add current position
+        self.position_history.append({
+            'x': robot_pos['x'],
+            'y': robot_pos['y'],
+            'time': current_time
+        })
+        
+        # Keep only last 10 seconds of history
+        cutoff_time = current_time - 10.0
+        self.position_history = [
+            p for p in self.position_history 
+            if p['time'] > cutoff_time
+        ]
+
+
+    def _detect_orbit_trap(self, angular_velocity: float) -> bool:
+        """
+        Detect if robot is stuck in orbit around obstacle.
+        
+        Detection criteria:
+        1. Turning in same direction for >3 seconds
+        2. Position history shows circular pattern
+        
+        Args:
+            angular_velocity: Current angular velocity
+            
+        Returns:
+            bool: True if orbit trap detected
+        """
+        current_time = time.time()
+        
+        # Already in escape mode
+        if self.orbit_escape_until > current_time:
+            return False
+        
+        # Track turn direction consistency
+        current_sign = 1 if angular_velocity > 0.1 else (-1 if angular_velocity < -0.1 else 0)
+        
+        if current_sign != 0:
+            if current_sign == self.last_angular_sign:
+                # Continuing same turn direction
+                self.same_turn_duration += 0.1  # Approximate
+            else:
+                # Direction changed
+                self.last_angular_sign = current_sign
+                self.same_turn_duration = 0.0
+        else:
+            # Not turning
+            self.same_turn_duration = 0.0
+        
+        # Check if stuck in orbit (turning same direction >3s)
+        if self.same_turn_duration > 3.0:
+            # Verify with position history (optional additional check)
+            if len(self.position_history) >= 5:
+                # Check if we're visiting similar positions
+                recent_positions = self.position_history[-5:]
+                distances = []
+                
+                for i in range(len(recent_positions) - 1):
+                    dx = recent_positions[i+1]['x'] - recent_positions[i]['x']
+                    dy = recent_positions[i+1]['y'] - recent_positions[i]['y']
+                    dist = (dx**2 + dy**2)**0.5
+                    distances.append(dist)
+                
+                avg_distance = sum(distances) / len(distances)
+                
+                # If moving very little (<0.3m between samples) = circling
+                if avg_distance < 0.3:
+                    logger.error(
+                        f"[ORBIT TRAP DETECTED] Turning {self.last_angular_sign} "
+                        f"for {self.same_turn_duration:.1f}s, avg movement: {avg_distance:.2f}m"
+                    )
+                    return True
+        
+        return False
+
+
+    def _create_orbit_escape_command(self) -> Dict:
+        """
+        Create forced escape command to break orbit trap.
+        
+        Strategy: Force straight movement for 2 seconds, ignoring obstacles.
+        
+        Returns:
+            dict: Escape command
+        """
+        # Set escape mode for 3 seconds
+        self.orbit_escape_until = time.time() + 3.0
+        self.same_turn_duration = 0.0
+        self.orbit_detected = True
+        
+        logger.warning(
+            "[ORBIT ESCAPE] Forcing straight movement for 3s to break orbit"
+        )
+        
+        return {
+            'action': 'orbit_escape',
+            'parameters': {
+                'linear_velocity': self.base_speed * 0.5,  # Medium speed
+                'angular_velocity': 0.0,  # FORCE STRAIGHT
+                'duration': 2.0
+            },
+            'confidence': 0.9,
+            'reason': 'orbit_escape_forced_straight',
+            'escape_mode': True  # Flag for safety override
+        }
+
+    def _decide_avoidance_direction(
+        self, 
+        clearances: Dict,
+        current_angular: float = 0.0
+    ) -> tuple[str, float]:
+        """
+        Decide which direction to steer for obstacle avoidance.
+        
+        Args:
+            clearances: Current clearance dict (front/left/right)
+            current_angular: Current angular velocity (for smoothing)
+            
+        Returns:
+            tuple: (direction_name, angular_velocity)
+        """
+        left = clearances.get('left', 0)
+        right = clearances.get('right', 0)
+        front = clearances.get('front', 0)
+        
+        # Clear difference threshold
+        CLEAR_DIFF = 0.15  # 15cm difference to choose side
+        
+        # Left is clearly better
+        if left > right + CLEAR_DIFF:
+            angular = 0.5  # Moderate left turn
+            direction = "left"
+        
+        # Right is clearly better
+        elif right > left + CLEAR_DIFF:
+            angular = -0.5  # Moderate right turn
+            direction = "right"
+        
+        # Similar clearance - maintain current direction if any
+        else:
+            if abs(current_angular) > 0.1:
+                # Continue current turn
+                angular = current_angular
+                direction = "continue"
+            else:
+                # Choose slightly better side
+                angular = 0.3 if left > right else -0.3
+                direction = "slight"
+        
+        return direction, angular
+
+
+    def _create_zone2_command(
+        self, 
+        clearances: Dict,
+        front_clear: float
+    ) -> Dict:
+        """
+        Create command for Zone 2 (MEDIUM distance: 0.3-0.7m).
+        
+        Strategy: Slow down + aggressive steering to avoid obstacle.
+        NO BACKUP - just turn and go around.
+        
+        Args:
+            clearances: Current clearances
+            front_clear: Front distance
+            
+        Returns:
+            dict: Navigation command
+        """
+        direction, angular = self._decide_avoidance_direction(clearances)
+        
+        # Adaptive speed: closer = slower
+        # front_clear: 0.7m → speed 0.6x
+        # front_clear: 0.5m → speed 0.4x
+        # front_clear: 0.3m → speed 0.2x
+        speed_factor = (front_clear - 0.3) / 0.4  # Linear scale 0.0-1.0
+        speed_factor = max(0.2, min(0.6, speed_factor))
+        
+        linear_vel = self.base_speed * self.exploration_boost * speed_factor
+        
+        logger.info(
+            f"[ZONE 2 - AVOIDANCE] Front: {front_clear:.2f}m → "
+            f"Speed: {speed_factor:.1%}, Steer {direction} ({angular:.2f})"
+        )
+        
+        return {
+            'action': 'avoidance_steering',
+            'parameters': {
+                'linear_velocity': linear_vel,
+                'angular_velocity': angular,
+                'duration': 1.0
+            },
+            'confidence': 0.8,
+            'reason': f'zone2_avoid_{direction}'
+        }
+
+
+    def _create_zone1_command(self, clearances: Dict) -> Dict:
+        """
+        Create command for Zone 1 (CRITICAL: <0.3m).
+        
+        Strategy:
+        1. Check if sides are clear (>0.25m) → Rotate in place
+        2. If all blocked → Gentle backup + rotate
+        
+        Args:
+            clearances: Current clearances
+            
+        Returns:
+            dict: Navigation command
+        """
+        left = clearances.get('left', 0)
+        right = clearances.get('right', 0)
+        front = clearances.get('front', 0)
+        
+        # Check if sides are clear enough for in-place rotation
+        if left > 0.25 or right > 0.25:
+            # Can rotate in place toward clearer side
+            if left > right:
+                angular = 0.7
+                direction = "left"
+            else:
+                angular = -0.7
+                direction = "right"
+            
+            logger.warning(
+                f"[ZONE 1 - ROTATE] Front blocked {front:.2f}m → "
+                f"Rotate {direction} (L:{left:.2f} R:{right:.2f})"
+            )
+            
+            return {
+                'action': 'critical_rotate',
+                'parameters': {
+                    'linear_velocity': 0.0,  # Pure rotation
+                    'angular_velocity': angular,
+                    'duration': 0.6
+                },
+                'confidence': 0.9,
+                'reason': f'zone1_rotate_{direction}'
+            }
+        
+        # All sides blocked - need gentle backup
+        else:
+            # Backup toward clearer side
+            angular = 0.5 if left > right else -0.5
+            
+            logger.error(
+                f"[ZONE 1 - BACKUP] All blocked (F:{front:.2f} L:{left:.2f} R:{right:.2f}) "
+                f"→ Gentle backup"
+            )
+            
+            return {
+                'action': 'critical_backup',
+                'parameters': {
+                    'linear_velocity': -0.15,  # Very slow backup
+                    'angular_velocity': angular,
+                    'duration': 0.5  # Short backup
+                },
+                'confidence': 0.7,
+                'reason': 'zone1_backup_blocked'
+            }
+
     def set_exploration_boost(self, boost: float):
         """
         Set speed boost factor for exploration missions.
@@ -384,132 +689,135 @@ class NavigationReasoner:
         else:  # Default or unknown directive
             # Standard exploration behavior
             return self._make_navigation_decision(vision_analysis)
-        
+
     def _frontier_aware_exploration(
         self,
         vision_analysis: Dict,
         robot_pos: Dict
     ) -> Dict[str, any]:
         """
-        Perform exploration with frontier detection.
+        Perform exploration with 3-zone reactive navigation.
+        
+        New strategy:
+        - Zone 3 (>0.7m): Normal forward + slight steering
+        - Zone 2 (0.3-0.7m): Slow + aggressive steering (NO BACKUP)
+        - Zone 1 (<0.3m): Rotate/backup decision
         """
-        clearances = vision_analysis.get('clearance', {})
+        clearances = vision_analysis.get('clearances', {})
         obstacles = vision_analysis.get('obstacles', [])
-
+        
         front_clear = clearances.get('forward', 999)
         left_clear = clearances.get('left', 999)
         right_clear = clearances.get('right', 999)
-
+        
         boosted_speed = self.base_speed * self.exploration_boost
 
-        # Try to get best frontier direction (with wall detection)
-        best_frontier = None
-        if self.use_frontier_detection and robot_pos:
-            best_frontier = self.frontier_detector.get_best_frontier(robot_pos)
+        # PRIORITY 0: Update position history
+        self._update_position_history(robot_pos)
 
-        # Strategy 1: Valid frontier + Clear Path
-        if best_frontier and front_clear > self.SAFE_DISTANCE:
-                frontier_direction = self.frontier_detector.get_frontier_direction(best_frontier)
-                if frontier_direction == 'left':
-                    logger.info(
-                        f"[FRONTIER EXPLORE] Turning left toward frontier"
-                        f"{best_frontier.distance:.1f}m"
-                    )
-                    return {
-                        'action': 'turn_left',
-                        'parameters': {
-                            'linear_velocity': boosted_speed * 0.4,
-                            'angular_velocity': self.NORMAL_TURN_SPEED,
-                            'duration': 1.5
-                        },
-                        'confidence': 0.9,
-                        'reason': 'frontier_exploration_left'
-                    }
-                elif frontier_direction == 'right':
-                    logger.info(
-                        f"[FRONTIER EXPLORE] Turning right toward frontier"
-                        f"{best_frontier.distance:.1f}m"
-                    )
-                    return {
-                        'action': 'turn_right',
-                        'parameters': {
-                            'linear_velocity': boosted_speed * 0.4,
-                            'angular_velocity': -self.NORMAL_TURN_SPEED,
-                            'duration': 1.5
-                        },
-                        'confidence': 0.9,
-                        'reason': 'frontier_exploration_right'
-                    }
-                elif frontier_direction == 'foward':
-                    logger.info(
-                        f"[FRONTIER EXPLORE] Moving toward frontier"
-                        f"{best_frontier.distance:.2f}m ahead"
-                    )
-                    return {
-                        'action': 'move_forward',
-                        'parameters': {
-                            'linear_velocity': boosted_speed,
-                            'angular_velocity': 0.0,
-                            'duration': 2.0
-                        },
-                        'confidence': 0.85,
-                        'reason': 'frontier_exploration_forward'
-                    }
+        # PRIORITY 1: Check if in escape mode
+        current_time = time.time()
+        if self.orbit_escape_until > current_time:
+            remaining = self.orbit_escape_until - current_time
+            logger.info(f"[ORBIT ESCAPE MODE] {remaining:.1f}s remaining - forcing straight")
             
-        # Strategy 2: No Frontier or Blocked → Clearance-Based
-        import random
-        if front_clear > self.SAFE_DISTANCE:
             return {
-                'action': 'move_forward',
+                'action': 'orbit_escape_active',
+                'parameters': {
+                    'linear_velocity': boosted_speed * 0.6,
+                    'angular_velocity': 0.0,  # Force straight
+                    'duration': 1.0
+                },
+                'confidence': 1.0,
+                'reason': 'orbit_escape_active',
+                'escape_mode': True
+            }
+        
+        # Reset orbit flag when escape complete
+        if self.orbit_detected and self.orbit_escape_until <= current_time:
+            logger.info("[ORBIT ESCAPE] Complete - resuming normal navigation")
+            self.orbit_detected = False
+        
+        # Determine navigation zone
+        zone = self._get_navigation_zone(front_clear)
+        
+        logger.debug(
+            f"[NAV ZONE {zone}] F:{front_clear:.2f} L:{left_clear:.2f} R:{right_clear:.2f}"
+        )
+        
+        # ========================================================================
+        # ZONE 1: CRITICAL (<0.3m) - Rotate or backup
+        # ========================================================================
+        if zone == 1:
+            command = self._create_zone1_command(clearances)
+            
+            # ADDED: Check orbit trap in Zone 1 (most likely to orbit)
+            angular = command['parameters']['angular_velocity']
+            if self._detect_orbit_trap(angular):
+                return self._create_orbit_escape_command()
+            
+            return command
+        
+        # ========================================================================
+        # ZONE 2: MEDIUM (0.3-0.7m) - Slow down + aggressive steering
+        # ========================================================================
+        elif zone == 2:
+            command = self._create_zone2_command(clearances, front_clear)
+            
+            # ADDED: Check orbit trap in Zone 2
+            angular = command['parameters']['angular_velocity']
+            if self._detect_orbit_trap(angular):
+                return self._create_orbit_escape_command()
+            
+            return command
+        
+        # ========================================================================
+        # ZONE 3: FAR (>0.7m) - Normal forward with frontier guidance
+        # ========================================================================
+        else:
+            # Try to get frontier direction
+            best_frontier = None
+            if self.use_frontier_detection and robot_pos:
+                best_frontier = self.frontier_detector.get_best_frontier(robot_pos)
+            
+            # Frontier-guided navigation
+            if best_frontier:
+                frontier_direction = self.frontier_detector.get_frontier_direction(
+                    best_frontier
+                )
+                
+                if frontier_direction == 'forward':
+                    angular = 0.0
+                elif frontier_direction == 'left':
+                    angular = 0.4
+                elif frontier_direction == 'right':
+                    angular = -0.4
+                else:
+                    angular = 0.0
+                
+                logger.info(
+                    f"[ZONE 3 - FRONTIER] Target {best_frontier.distance:.1f}m "
+                    f"at {best_frontier.angle:.0f}° → {frontier_direction}"
+                )
+            
+            # No frontier - use clearance-based steering
+            else:
+                direction, angular = self._decide_avoidance_direction(clearances)
+                
+                logger.info(
+                    f"[ZONE 3 - CLEARANCE] Steer {direction} (angular: {angular:.2f})"
+                )
+            
+            return {
+                'action': 'explore_forward',
                 'parameters': {
                     'linear_velocity': boosted_speed,
-                    'angular_velocity': random.uniform(-0.15, 0.15),
+                    'angular_velocity': angular,
                     'duration': 2.0
-                    },
-                    'confidence': 0.85,
-                    'reason': 'explore_cautious_forward'
-                }
-        elif front_clear > self.WARNING_DISTANCE:
-            if left_clear > right_clear + 0.3:
-                angular_bias = random.uniform(0.1, 0.3)
-            elif right_clear > left_clear + 0.3:
-                angular_bias = random.uniform(-0.3, -0.1)
-            else:
-                angular_bias = random.uniform(-0.2, 0.2)
-
-            return {
-                'action': 'move_forward',
-                'parameters': {
-                    'linear_velocity': boosted_speed * 0.5,
-                    'angular_velocity': angular_bias,
-                    'duration': 1.5
-                    },
-                    'confidence': 0.7,
-                    'reason': 'explore_cautious_forward'
-                }
-                        
-        else:
-            if left_clear > right_clear:
-                return {
-                    'action': 'rotate_left',
-                    'parameters': {
-                        'linear_velocity': boosted_speed * 0.2,
-                        'angular_velocity': self.NORMAL_TURN_SPEED,
-                        'duration': 1.2                        },
-                    'confidence': 0.8,
-                    'reason': 'explore_turn_left'
-                }
-            else:
-                return {
-                    'action': 'rotate_right',
-                    'parameters': {
-                        'linear_velocity': boosted_speed * 0.2,
-                        'angular_velocity': -self.NORMAL_TURN_SPEED,
-                        'duration': 0.8
-                    },
-                    'confidence': 0.8,
-                    'reason': 'explore_turn_right'
-                }
+                },
+                'confidence': 0.85,
+                'reason': 'zone3_explore_forward'
+            }
             
     def _make_navigation_decision(
         self,
