@@ -70,13 +70,6 @@ class NavigationReasoner:
         self. frontier_detector = FrontierDetector()    
         self.use_frontier_detection = True
 
-        # Track position history for stuck detection
-        self.position_history = []  # List of (x, y, timestamp)
-        self.last_angular_sign = 0  # Track turn direction
-        self.same_turn_duration = 0.0  # How long turning same direction
-        self.orbit_detected = False
-        self.orbit_escape_until = 0.0  # Timestamp until which we force straight
-
     def _get_navigation_zone(self, front_clear: float) -> int:
         """
         Determine navigation zone based on front clearance.
@@ -98,125 +91,6 @@ class NavigationReasoner:
             return 2  # MEDIUM - slow + steer
         else:
             return 1  # CRITICAL - stop/rotate
-
-    def _update_position_history(self, robot_pos: Optional[Dict]):
-        """
-        Track robot position history for stuck detection.
-        
-        Args:
-            robot_pos: Current robot position {x, y, theta}
-        """
-        if robot_pos is None:
-            return
-        
-        current_time = time.time()
-        
-        # Add current position
-        self.position_history.append({
-            'x': robot_pos['x'],
-            'y': robot_pos['y'],
-            'time': current_time
-        })
-        
-        # Keep only last 10 seconds of history
-        cutoff_time = current_time - 10.0
-        self.position_history = [
-            p for p in self.position_history 
-            if p['time'] > cutoff_time
-        ]
-
-
-    def _detect_orbit_trap(self, angular_velocity: float) -> bool:
-        """
-        Detect if robot is stuck in orbit around obstacle.
-        
-        Detection criteria:
-        1. Turning in same direction for >3 seconds
-        2. Position history shows circular pattern
-        
-        Args:
-            angular_velocity: Current angular velocity
-            
-        Returns:
-            bool: True if orbit trap detected
-        """
-        current_time = time.time()
-        
-        # Already in escape mode
-        if self.orbit_escape_until > current_time:
-            return False
-        
-        # Track turn direction consistency
-        current_sign = 1 if angular_velocity > 0.1 else (-1 if angular_velocity < -0.1 else 0)
-        
-        if current_sign != 0:
-            if current_sign == self.last_angular_sign:
-                # Continuing same turn direction
-                self.same_turn_duration += 0.1  # Approximate
-            else:
-                # Direction changed
-                self.last_angular_sign = current_sign
-                self.same_turn_duration = 0.0
-        else:
-            # Not turning
-            self.same_turn_duration = 0.0
-        
-        # Check if stuck in orbit (turning same direction >3s)
-        if self.same_turn_duration > 3.0:
-            # Verify with position history (optional additional check)
-            if len(self.position_history) >= 5:
-                # Check if we're visiting similar positions
-                recent_positions = self.position_history[-5:]
-                distances = []
-                
-                for i in range(len(recent_positions) - 1):
-                    dx = recent_positions[i+1]['x'] - recent_positions[i]['x']
-                    dy = recent_positions[i+1]['y'] - recent_positions[i]['y']
-                    dist = (dx**2 + dy**2)**0.5
-                    distances.append(dist)
-                
-                avg_distance = sum(distances) / len(distances)
-                
-                # If moving very little (<0.3m between samples) = circling
-                if avg_distance < 0.3:
-                    logger.error(
-                        f"[ORBIT TRAP DETECTED] Turning {self.last_angular_sign} "
-                        f"for {self.same_turn_duration:.1f}s, avg movement: {avg_distance:.2f}m"
-                    )
-                    return True
-        
-        return False
-
-
-    def _create_orbit_escape_command(self) -> Dict:
-        """
-        Create forced escape command to break orbit trap.
-        
-        Strategy: Force straight movement for 2 seconds, ignoring obstacles.
-        
-        Returns:
-            dict: Escape command
-        """
-        # Set escape mode for 3 seconds
-        self.orbit_escape_until = time.time() + 3.0
-        self.same_turn_duration = 0.0
-        self.orbit_detected = True
-        
-        logger.warning(
-            "[ORBIT ESCAPE] Forcing straight movement for 3s to break orbit"
-        )
-        
-        return {
-            'action': 'orbit_escape',
-            'parameters': {
-                'linear_velocity': self.base_speed * 0.5,  # Medium speed
-                'angular_velocity': 0.0,  # FORCE STRAIGHT
-                'duration': 2.0
-            },
-            'confidence': 0.9,
-            'reason': 'orbit_escape_forced_straight',
-            'escape_mode': True  # Flag for safety override
-        }
 
     def _decide_avoidance_direction(
         self, 
@@ -711,32 +585,6 @@ class NavigationReasoner:
         right_clear = clearances.get('right', 999)
         
         boosted_speed = self.base_speed * self.exploration_boost
-
-        # PRIORITY 0: Update position history
-        self._update_position_history(robot_pos)
-
-        # PRIORITY 1: Check if in escape mode
-        current_time = time.time()
-        if self.orbit_escape_until > current_time:
-            remaining = self.orbit_escape_until - current_time
-            logger.info(f"[ORBIT ESCAPE MODE] {remaining:.1f}s remaining - forcing straight")
-            
-            return {
-                'action': 'orbit_escape_active',
-                'parameters': {
-                    'linear_velocity': boosted_speed * 0.6,
-                    'angular_velocity': 0.0,  # Force straight
-                    'duration': 1.0
-                },
-                'confidence': 1.0,
-                'reason': 'orbit_escape_active',
-                'escape_mode': True
-            }
-        
-        # Reset orbit flag when escape complete
-        if self.orbit_detected and self.orbit_escape_until <= current_time:
-            logger.info("[ORBIT ESCAPE] Complete - resuming normal navigation")
-            self.orbit_detected = False
         
         # Determine navigation zone
         zone = self._get_navigation_zone(front_clear)
@@ -749,27 +597,13 @@ class NavigationReasoner:
         # ZONE 1: CRITICAL (<0.3m) - Rotate or backup
         # ========================================================================
         if zone == 1:
-            command = self._create_zone1_command(clearances)
-            
-            # ADDED: Check orbit trap in Zone 1 (most likely to orbit)
-            angular = command['parameters']['angular_velocity']
-            if self._detect_orbit_trap(angular):
-                return self._create_orbit_escape_command()
-            
-            return command
+            return self._create_zone1_command(clearances)
         
         # ========================================================================
         # ZONE 2: MEDIUM (0.3-0.7m) - Slow down + aggressive steering
         # ========================================================================
         elif zone == 2:
-            command = self._create_zone2_command(clearances, front_clear)
-            
-            # ADDED: Check orbit trap in Zone 2
-            angular = command['parameters']['angular_velocity']
-            if self._detect_orbit_trap(angular):
-                return self._create_orbit_escape_command()
-            
-            return command
+            return self._create_zone2_command(clearances, front_clear)
         
         # ========================================================================
         # ZONE 3: FAR (>0.7m) - Normal forward with frontier guidance

@@ -397,9 +397,6 @@ class RobotControllerInterface(Node):
             action = navigation_decision.get('action', 'stop')
             parameters = navigation_decision.get('parameters', {})
             
-            # Extract escape mode flag
-            escape_mode = navigation_decision.get('escape_mode', False)
-            
             # Create Twist directly
             class TwistMsg:
                 def __init__(self):
@@ -423,16 +420,10 @@ class RobotControllerInterface(Node):
             twist_msg.linear.x = max(-max_linear, min(max_linear, twist_msg.linear.x))
             twist_msg.angular.z = max(-max_angular, min(max_angular, twist_msg.angular.z))
             
-            # Validate safety (skip if escape mode)
-            if not escape_mode and not validate_robot_command_safety(twist_msg, self.config):
-                logger.warning("Command failed safety validation")
-                return await self._emergency_stop()
-            
             # Send command with escape mode flag
             success = await self._send_command(
                 twist_msg,
                 parameters.get('duration', 1.0),
-                escape_mode=escape_mode
             )
             
             if success:
@@ -446,7 +437,7 @@ class RobotControllerInterface(Node):
             self.robot_status.state = RobotState.ERROR
             return False
 
-    async def _send_command(self, twist: Twist, duration: float, escape_mode: bool = False) -> bool:
+    async def _send_command(self, twist: Twist, duration: float) -> bool:
         """
         Execute command with SINGLE critical abort check.
         
@@ -462,7 +453,6 @@ class RobotControllerInterface(Node):
             logger.info(
                 f"Publishing: linear={twist.linear.x:.3f}, "
                 f"angular={twist.angular.z:.3f}, duration={duration:.2f}s"
-                + (" [ESCAPE MODE]" if escape_mode else "")
             )
             
             publish_rate = 20  # 20Hz
@@ -481,38 +471,6 @@ class RobotControllerInterface(Node):
             self._current_angular_vel = twist.angular.z
             
             for i in range(max(1, iterations)):
-                # ====================================================================
-                # ESCAPE MODE: Only abort if EXTREMELY close (0.15m)
-                # ====================================================================
-                if escape_mode:
-                    if self.lidar_data is not None:
-                        try:
-                            min_dist = min(
-                                r for r in self.lidar_data.ranges 
-                                if not (np.isnan(r) or np.isinf(r))
-                            )
-                            
-                            if min_dist < 0.15:  # Emergency only
-                                logger.error(
-                                    f"[ESCAPE ABORT] Critical: {min_dist:.3f}m "
-                                    f"(escape mode emergency stop)"
-                                )
-                                for _ in range(5):
-                                    self.ros_node.publish_stop()
-                                    await asyncio.sleep(0.01)
-                                return False
-                            
-                        except (ValueError, AttributeError) as e:
-                            logger.warning(f"[ESCAPE MODE] LIDAR read error: {e}")
-                        
-                        # Continue in escape mode without normal checks
-                        self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
-                        await asyncio.sleep(interval)
-                        continue
-                
-                # ====================================================================
-                # NORMAL MODE: Full safety checks
-                # ====================================================================
                 if self.lidar_data is not None:
                     abort_result = safety_monitor.check_critical_abort(self.lidar_data)
                     
