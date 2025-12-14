@@ -9,6 +9,12 @@ from typing import Dict, Optional
 from dataclasses import dataclass, asdict
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
+# ADDED: Import composite parser
+from multi_function_agent._robot_vision_controller.core.composite_mission_parser import (
+    CompositeMissionParser,
+    CompositeParsingError
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +71,34 @@ async def parse_mission_from_prompt(user_prompt: str, builder) -> Mission:
         UnsupportedMissionError: If mission type is not recognized
     """
     try:
+        # Check if composite mission
+        composite_parser = CompositeMissionParser()
+
+        if composite_parser.is_composite_mission(user_prompt):
+            logger.info("[GOAL PARSER] Detected composite mission")
+            
+            try:
+                # Parse as composite
+                composite_config = await composite_parser.parse(user_prompt, builder)
+                
+                # Wrap in Mission object
+                mission = Mission(
+                    type='composite_mission',
+                    target_class=None,
+                    parameters={'composite_config': composite_config},
+                    description=composite_config.description
+                )
+                
+                logger.info(
+                    f"[GOAL PARSER] Composite mission: "
+                    f"{len(composite_config.steps)} steps"
+                )
+                return mission
+                
+            except CompositeParsingError as e:
+                logger.warning(f"Composite parsing failed: {e}, falling back to simple")
+                # Fallback to simple parsing
+
         # Load system prompt from file
         from pathlib import Path
         prompt_file = Path(__file__).parent / "text" / "mission_parser_prompt.txt"

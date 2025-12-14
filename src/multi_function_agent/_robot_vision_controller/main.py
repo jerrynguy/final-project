@@ -1,3 +1,4 @@
+import json
 import numpy as np
 from pydantic import Field
 import time
@@ -38,6 +39,10 @@ from multi_function_agent._robot_vision_controller.core.models import (
     get_robot_vision_model_manager,
     preload_robot_vision_model,
     is_yolo_ready,
+)
+from multi_function_agent._robot_vision_controller.core.interactive_clarifier import (
+    InteractiveMissionClarifier,
+    ClarificationError
 )
 from multi_function_agent.register import RobotVisionConfig
 
@@ -151,11 +156,77 @@ async def _robot_vision_controller(
                 await robot_interface.execute_command(back_away_cmd)
                 await asyncio.sleep(0.5)
         
+        # Initialize mission clarifier
+        clarifier = InteractiveMissionClarifier()
+
         # Parse mission
         user_prompt = builder._workflow_builder.general_config.front_end.input_query[0]
         try:
+            # Parse mission (might be composite)
             mission_controller = await MissionController.from_prompt(user_prompt, builder)
-        
+            parsed_mission = mission_controller.mission.to_dict()
+            
+            # Get current context for clarification
+            # Capture frame for object detection context
+            await stream_handler.start_stream(stream_url)
+            await asyncio.sleep(1.0)  # Wait for first frame
+            
+            frame = await stream_handler.get_latest_frame()
+            context = {
+                'detected_objects': [],
+                'slam_map': None,
+                'robot_pos': None
+            }
+            
+            # Detect objects if YOLO ready
+            if frame is not None and is_yolo_ready():
+                # Quick detection for context (non-blocking)
+                try:
+                    detected = vision_analyzer.detect_target_objects(
+                        frame, 
+                        'person',  # Default check for common objects
+                        confidence_threshold=0.6
+                    )
+                    context['detected_objects'] = detected
+                except Exception as e:
+                    logger.debug(f"Context detection skipped: {e}")
+
+            # ADDED: Check if clarification needed
+            clarification_question = await clarifier.analyze_mission(
+                user_prompt,
+                parsed_mission,
+                context
+            )
+            
+            if clarification_question:
+                logger.info("[CLARIFICATION] Asking user for clarification...")
+                
+                # Format question for frontend
+                question_output = {
+                    'type': 'clarification_needed',
+                    'question': clarification_question.question_text,
+                    'question_type': clarification_question.question_type,
+                    'suggestions': clarification_question.suggested_answers,
+                    'field': clarification_question.ambiguity.field
+                }
+                
+                # Yield question to frontend
+                async def ask_question(x: str) -> str:
+                    return json.dumps(question_output, indent=2)
+                
+                yield FunctionInfo.from_fn(
+                    ask_question,
+                    description="Mission clarification needed",
+                    requires_response=True  # Signal that we need user input
+                )
+
+                # ADDED: Wait for user response
+                # This requires frontend to send response back
+                # For now, we'll continue without blocking
+                # TODO: Implement response waiting mechanism
+                
+                logger.info("[CLARIFICATION] Question sent to user")
+
         except UnsupportedMissionError as e:
             error_msg = (
                 f"❌ Mission Not Supported\n\n"

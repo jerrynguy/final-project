@@ -248,6 +248,75 @@ class NavigationReasoner:
                 'confidence': 0.7,
                 'reason': 'zone1_backup_blocked'
             }
+        
+    def _execute_directional_command(
+    self,
+    directive: str,
+    vision_analysis: Dict
+) -> Dict:
+        """
+        Execute directional commands from composite missions.
+        
+        Args:
+            directive: Format 'directional_move_forward', 'directional_turn_left', etc.
+            vision_analysis: Current vision state
+        
+        Returns:
+            Navigation command dict
+        """
+        # Extract direction from directive
+        # Format: 'directional_move_forward' → 'forward'
+        parts = directive.split('_')
+        if len(parts) < 2:
+            logger.error(f"Invalid directional directive: {directive}")
+            return self.command_factory.create_forward_command(5)
+        
+        command_type = parts[-1]  # 'forward', 'left', 'right', 'backward'
+        
+        safety_score = vision_analysis.get('safety_score', 5)
+        
+        # Generate appropriate command
+        if command_type == 'forward':
+            return {
+                'action': 'move_forward',
+                'parameters': {
+                    'linear_velocity': self.base_speed * 0.5,  # Moderate speed
+                    'angular_velocity': 0.0,
+                    'duration': 2.0
+                },
+                'confidence': 0.8,
+                'reason': 'directional_forward'
+            }
+        
+        elif command_type == 'backward':
+            return {
+                'action': 'move_backward',
+                'parameters': {
+                    'linear_velocity': -self.base_speed * 0.3,  # Slow backup
+                    'angular_velocity': 0.0,
+                    'duration': 1.5
+                },
+                'confidence': 0.8,
+                'reason': 'directional_backward'
+            }
+        
+        elif command_type in ['left', 'right']:
+            angular_vel = 0.6 if command_type == 'left' else -0.6
+            
+            return {
+                'action': f'rotate_{command_type}',
+                'parameters': {
+                    'linear_velocity': 0.0,
+                    'angular_velocity': angular_vel,
+                    'duration': 2.0
+                },
+                'confidence': 0.9,
+                'reason': f'directional_turn_{command_type}'
+            }
+        
+        else:
+            logger.error(f"Unknown directional command: {command_type}")
+            return self.command_factory.create_forward_command(safety_score)
 
     def set_exploration_boost(self, boost: float):
         """
@@ -717,7 +786,17 @@ class NavigationReasoner:
         try:
             # Priority 3: Execute mission directive or standard navigation
             if mission_directive:
-                decision = self._execute_mission_directive(mission_directive, vision_analysis,robot_pos)
+                if mission_directive.startswith('directional_'):
+                    return self._execute_directional_command(
+                        mission_directive, 
+                        vision_analysis
+                    )
+                
+                decision = self._execute_mission_directive(
+                    mission_directive, 
+                    vision_analysis,
+                    robot_pos
+                )
             else:
                 decision = self._make_navigation_decision(vision_analysis)
             

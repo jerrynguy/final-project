@@ -23,6 +23,7 @@ from multi_function_agent._robot_vision_controller.core.mission_controller.missi
 from multi_function_agent._robot_vision_controller.core.mission_controller.missions.follow_mission import FollowMission
 from multi_function_agent._robot_vision_controller.core.mission_controller.missions.patrol_mission import PatrolMission
 from multi_function_agent._robot_vision_controller.core.mission_controller.missions.explore_mission import ExploreMission
+from multi_function_agent._robot_vision_controller.core.mission_controller.missions.composite_mission import CompositeMission
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,8 @@ class MissionController:
     MISSION_CLASSES = {
         'follow_target': FollowMission,
         'patrol_laps': PatrolMission,
-        'explore_area': ExploreMission
+        'explore_area': ExploreMission,
+        'composite_mission': CompositeMission 
     }
     
     def __init__(self, mission: Mission):
@@ -66,6 +68,12 @@ class MissionController:
     
     def _validate_requirements(self) -> None:
         """Validate mission requirements using validator."""
+        # Skip validation for composite missions (steps validated individually)
+        if self.mission.type == 'composite_mission':
+            logger.info("[VALIDATION] Composite mission - skipping global validation")
+            return
+        
+        # EXISTING: Validate simple missions
         MissionValidator.validate_mission(
             self.mission.type,
             target_class=getattr(self.mission, 'target_class', None)

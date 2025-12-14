@@ -1,6 +1,5 @@
 """
-Robot Control Backend - FastAPI + WebSocket
-Install: pip install fastapi uvicorn websockets python-multipart
+Robot Control Backend - FastAPI + WebSocket + ROS2 Telemetry
 Run: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 
@@ -15,12 +14,15 @@ from typing import List, Optional
 import json
 from datetime import datetime
 
+# CHANGED: Import ROS2Bridge
+from ros2_bridge import ROS2Bridge, OdomData, ScanData
+
 app = FastAPI(title="Robot Control API")
 
 # CORS để React có thể connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Trong production nên chỉ định cụ thể
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,20 +38,45 @@ MISSION_SCRIPTS = {
     "follow": "~/start_robot_stack_follow.sh"
 }
 
+# CHANGED: Add ROS2Bridge instance (singleton)
+ros2_bridge: Optional[ROS2Bridge] = None
+telemetry_active = False
+
 # WebSocket connections management
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
+        # CHANGED: Separate telemetry connections
+        self.telemetry_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
 
+    # CHANGED: Add telemetry connection manager
+    async def connect_telemetry(self, websocket: WebSocket):
+        await websocket.accept()
+        self.telemetry_connections.append(websocket)
+
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    # CHANGED: Disconnect telemetry
+    def disconnect_telemetry(self, websocket: WebSocket):
+        if websocket in self.telemetry_connections:
+            self.telemetry_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
         for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except:
+                pass
+
+    # CHANGED: Broadcast telemetry to specific connections
+    async def broadcast_telemetry(self, message: dict):
+        for connection in self.telemetry_connections:
             try:
                 await connection.send_json(message)
             except:
@@ -73,6 +100,10 @@ class CommandResponse(BaseModel):
     command: str
     timestamp: str
 
+# CHANGED: Add telemetry control model
+class TelemetryControl(BaseModel):
+    enabled: bool
+
 # Endpoints
 @app.get("/")
 async def root():
@@ -84,6 +115,7 @@ async def health_check():
     return {
         "status": "healthy",
         "docker_dir_exists": DOCKER_DIR.exists(),
+        "telemetry_active": telemetry_active,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -208,6 +240,66 @@ async def docker_status():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+# CHANGED: Add telemetry control endpoint
+@app.post("/api/telemetry/control")
+async def control_telemetry(control: TelemetryControl):
+    """Start or stop telemetry streaming"""
+    global ros2_bridge, telemetry_active
+    
+    if control.enabled and not telemetry_active:
+        # Start telemetry
+        ros2_bridge = ROS2Bridge()
+        telemetry_active = True
+        
+        # Start odom stream
+        asyncio.create_task(
+            ros2_bridge.start_odom_stream(
+                callback=lambda odom: manager.broadcast_telemetry({
+                    "type": "odom",
+                    "data": {
+                        "x": odom.x,
+                        "y": odom.y,
+                        "theta": odom.theta,
+                        "linear_vel": odom.linear_vel,
+                        "angular_vel": odom.angular_vel,
+                        "timestamp": odom.timestamp
+                    }
+                })
+            )
+        )
+        
+        # Start scan stream
+        asyncio.create_task(
+            ros2_bridge.start_scan_stream(
+                callback=lambda scan: manager.broadcast_telemetry({
+                    "type": "scan",
+                    "data": {
+                        "ranges": scan.ranges,
+                        "angle_min": scan.angle_min,
+                        "angle_max": scan.angle_max,
+                        "angle_increment": scan.angle_increment,
+                        "range_min": scan.range_min,
+                        "range_max": scan.range_max,
+                        "timestamp": scan.timestamp
+                    }
+                })
+            )
+        )
+        
+        return {"status": "started", "message": "Telemetry streaming started"}
+    
+    elif not control.enabled and telemetry_active:
+        # Stop telemetry
+        if ros2_bridge:
+            ros2_bridge.stop()
+        telemetry_active = False
+        ros2_bridge = None
+        
+        return {"status": "stopped", "message": "Telemetry streaming stopped"}
+    
+    else:
+        return {"status": "no_change", "message": f"Telemetry already {'active' if telemetry_active else 'inactive'}"}
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket for real-time updates"""
@@ -227,6 +319,35 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
+# CHANGED: Add dedicated telemetry WebSocket
+@app.websocket("/ws/telemetry")
+async def telemetry_websocket(websocket: WebSocket):
+    """WebSocket for ROS2 telemetry streaming (odom + scan)"""
+    await manager.connect_telemetry(websocket)
+    try:
+        # Send initial status
+        await websocket.send_json({
+            "type": "telemetry_status",
+            "active": telemetry_active,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # Keep connection alive
+        while True:
+            # Wait for messages (ping/pong or control)
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            # Handle ping
+            if message.get("type") == "ping":
+                await websocket.send_json({
+                    "type": "pong",
+                    "timestamp": datetime.now().isoformat()
+                })
+    
+    except WebSocketDisconnect:
+        manager.disconnect_telemetry(websocket)
+
 # Terminal output streaming endpoint
 @app.websocket("/ws/terminal/{session_id}")
 async def terminal_stream(websocket: WebSocket, session_id: str):
@@ -244,6 +365,14 @@ async def terminal_stream(websocket: WebSocket, session_id: str):
             })
     except WebSocketDisconnect:
         pass
+
+# CHANGED: Cleanup on shutdown
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up resources on shutdown"""
+    global ros2_bridge
+    if ros2_bridge:
+        ros2_bridge.stop()
 
 if __name__ == "__main__":
     import uvicorn

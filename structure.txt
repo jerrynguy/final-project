@@ -1,0 +1,101 @@
+nemo-agent-toolkit/
+└── examples/
+    └── multi_function_agent/
+        ├── configs/
+        │   └── config.yml                                      # System configuration
+        │
+        ├── docker/
+        │   ├── Dockerfile                                      # Container setup with ROS2
+        │   ├── build_container.sh                              # Build script
+        │   ├── run_hybrid_container.sh                         # Run with volume mounts
+        │   ├── init_volumes.sh                                 # Initialize persistent volumes
+        │   ├── start_robot_system.sh                           # Auto-launcher (all services)
+        │   ├── start_robot_stack_explore.sh                    # Launch Gazebo + SLAM
+        │   └── start_robot_stack_patrol.sh                     # Launch Gazebo + Nav2
+        │
+        ├── src/
+        │   └── multi_function_agent/
+        │       ├── __init__.py
+        │       ├── register.py                                 # NAT registration + config class
+        │       │
+        │       ├── configs/
+        │       │   └── config.yml                              # Robot config (symlink/copy)
+        │       │
+        │       └── _robot_vision_controller/
+        │           ├── main.py                                 # ⭐ MAIN ENTRY POINT
+        │           ├── test_integration.py                     # Integration test suite
+        │           │
+        │           ├── core/                                   # 🧠 Core Logic
+        │           │   ├── goal_parser.py                      # ✏️ Simple mission parser
+        │           │   ├── composite_mission_parser.py         # Composite mission parser
+        │           │   ├── interactive_clarifier.py            # Ambiguity detection + questions
+        │           │   ├── models.py                           # YOLO model manager
+        │           │   ├── query_extractor.py                  # Prompt parameter extraction
+        │           │   │
+        │           │   ├── text/
+        │           │   │   └── mission_parser_prompt.txt       # Simple mission prompt (3 types)
+        │           │   │
+        │           │   ├── ros2_node/                          # ROS2 Bridge (Python 3.10 subprocess)
+        │           │   │   ├── ros2_node.py                    # Bridge main (Python 3.11 side)
+        │           │   │   └── ros2_daemon_script.py           # Daemon (Python 3.10 side)
+        │           │   │
+        │           │   └── mission_controller/                 # 🎯 Mission System
+        │           │       ├── mission_controller.py           # ✏️ Orchestrator
+        │           │       │
+        │           │       ├── mission_validator/
+        │           │       │   └── mission_validator.py        # Requirements validation
+        │           │       │
+        │           │       └── missions/                       # Mission Types
+        │           │           ├── base_mission.py             # Abstract base class
+        │           │           ├── explore_mission.py          # Explore + SLAM
+        │           │           ├── follow_mission.py           # Target tracking
+        │           │           ├── patrol_mission.py           # Lap-based patrol
+        │           │           ├── composite_mission.py        # Multi-step state machine
+        │           │           ├── directional_command_step.py # Turn left/right/forward
+        │           │           └── condition_check_step.py     # Conditional branching
+        │           │
+        │           ├── navigation/                             # 🧭 Navigation System
+        │           │   ├── navigation_reasoner.py              # ✏️ Decision making
+        │           │   ├── robot_controller_interface.py       # ROS2 communication
+        │           │   └── nav2_interface.py                   # Nav2 Python wrapper
+        │           │
+        │           ├── perception/                             # 👁️ Vision & Sensors
+        │           │   ├── robot_vision_analyzer.py            # YOLO + LiDAR fusion
+        │           │   ├── spatial_detector.py                 # LiDAR spatial analysis
+        │           │   ├── lidar_monitor.py                    # Real-time safety monitor
+        │           │   ├── rtsp_stream_handler.py              # Video stream management
+        │           │   ├── slam_controller.py                  # SLAM Toolbox integration
+        │           │   └── frontier_detector.py                # Frontier detection for exploration
+        │           │
+        │           └── utils/                                  # 🛠️ Utilities
+        │               ├── geometry_utils.py                   # Frame processing
+        │               ├── movement_commands.py                # Command factory
+        │               ├── safety_checks.py                    # Safety validation
+        │               ├── ros_interface.py                    # ROS utilities
+        │               ├── ros2_stubs.py                       # Message stubs (Python 3.11)
+        │               │
+        │               └── log/                                # Logging utilities
+        │                   ├── error_handlers.py
+        │                   ├── output_formatter.py
+        │                   └── performance_logger.py
+        │
+        ├── gui_controller/                                     # 🖥️ Web Interface
+        │   ├── backend/
+        │   │   └── main.py                                     # FastAPI server
+        │   │
+        │   └── frontend/
+        │       ├── src/
+        │       │   ├── components/
+        │       │   │   ├── ChatInterface.tsx                   # ✏️ MODIFIED - Main chat
+        │       │   │   └── ClarificationModal.tsx              # Clarification UI
+        │       │   │
+        │       │   └── hooks/
+        │       │       └── useMissionClarification.ts          # Clarification logic
+        │       │
+        │       ├── package.json
+        │       └── vite.config.ts
+        │
+        ├── pyproject.toml                                      # Python package config
+        ├── LICENSE
+        ├── README.md                                           # 📖 Documentation
+        └── .gitattributes                                      # Git LFS for models
