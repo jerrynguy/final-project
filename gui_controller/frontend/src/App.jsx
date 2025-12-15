@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Send, PlayCircle, Terminal, Wifi, WifiOff, Circle, Navigation, Radar, Map } from 'lucide-react';
+import ClarificationModal from './components/ClarificationModal';
+import { useMissionClarification } from './hooks/useMissionClarification';
 
 const API_URL = 'http://localhost:8000';
 
@@ -32,6 +34,14 @@ export default function RobotControlUI() {
     'rtsp://192.168.1.100:8554/camera1',
     'custom'
   ];
+
+  const {
+    isWaitingForResponse,
+    currentQuestion,
+    askClarification,
+    submitAnswer,
+    cancelClarification
+  } = useMissionClarification();
 
   // WebSocket connection (command channel)
   useEffect(() => {
@@ -198,16 +208,19 @@ export default function RobotControlUI() {
   const sendCommand = async () => {
     if (!prompt.trim()) return;
     
-    addMessage('user', prompt);
+    const originalPrompt = prompt;
+    addMessage('user', originalPrompt);
+    setPrompt('');
     
     const finalRtsp = rtspUrl === 'custom' ? customRtsp : rtspUrl;
     
     try {
+      // Send initial command
       const res = await fetch(`${API_URL}/api/command/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt,
+          prompt: originalPrompt,
           mission_type: mission,
           rtsp_url: finalRtsp,
           duration
@@ -215,8 +228,41 @@ export default function RobotControlUI() {
       });
       
       const data = await res.json();
-      addMessage('assistant', data.message);
-      setPrompt('');
+      
+      // Check if clarification needed
+      if (data.status === 'needs_clarification' && data.question) {
+        addMessage('system', '🤔 Mission needs clarification...');
+        
+        try {
+          // Wait for user response via modal
+          const response = await askClarification(data.question, originalPrompt);
+          
+          addMessage('user', `Clarification: ${response.user_response}`);
+          
+          // Send clarified command
+          const clarifiedRes = await fetch(`${API_URL}/api/command/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: originalPrompt,
+              clarification: response.user_response,
+              mission_type: mission,
+              rtsp_url: finalRtsp,
+              duration
+            })
+          });
+          
+          const clarifiedData = await clarifiedRes.json();
+          addMessage('assistant', clarifiedData.message);
+          
+        } catch (clarificationError) {
+          addMessage('system', '❌ Mission cancelled');
+        }
+      } else {
+        // No clarification needed
+        addMessage('assistant', data.message);
+      }
+      
     } catch (err) {
       addMessage('assistant', `❌ Error: ${err.message}`);
     }
@@ -315,7 +361,7 @@ export default function RobotControlUI() {
           </div>
         </div>
 
-        {/* CHANGED: Telemetry Dashboard (conditionally shown) */}
+        {/* Telemetry Dashboard (conditionally shown) */}
         {showTelemetry && (
           <div className="bg-slate-800/50 backdrop-blur-lg rounded-2xl p-6 mb-6 border border-slate-700/50 shadow-2xl">
             <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
@@ -642,6 +688,14 @@ export default function RobotControlUI() {
           {/* Closing tags và CSS */}
           </div>
         </div>
+
+        {/* Clarification Modal */}
+        <ClarificationModal
+          isOpen={isWaitingForResponse}
+          question={currentQuestion}
+          onAnswer={submitAnswer}
+          onCancel={cancelClarification}
+        />
 
         <style jsx>{`
           @keyframes fade-in {
