@@ -31,6 +31,9 @@ from multi_function_agent._robot_vision_controller.core.mission_controller.missi
     MissionController,
     MissionRequirementsError
 )
+from multi_function_agent._robot_vision_controller.core.mission_controller.missions.composite_mission import (
+    MissionTransitionError 
+)
 from multi_function_agent._robot_vision_controller.core.goal_parser import (
     MissionParsingError,
     UnsupportedMissionError
@@ -449,12 +452,28 @@ async def run_robot_control_loop(
                 'width': frame.shape[1],
                 'height': frame.shape[0]
             } if frame is not None else None
-            
-            mission_result = mission_controller.process_frame(
-                detected_objects=detected_objects,
-                robot_pos=robot_pos,
-                frame_info=frame_info
-            )
+
+            if slam_controller and slam_controller.is_running:
+                slam_controller.maybe_auto_save()
+
+            try:
+                mission_result = mission_controller.process_frame(
+                    detected_objects=detected_objects,
+                    robot_pos=robot_pos,
+                    frame_info=frame_info
+                )
+            except MissionTransitionError as e:
+                # Composite mission transition failed
+                logger.error("=" * 60)
+                logger.error("❌ MISSION TRANSITION FAILED")
+                logger.error("=" * 60)
+                logger.error(f"Error: {e}")
+                logger.error("")
+                logger.error("Mission aborted. Check requirements and try again.")
+                logger.error("=" * 60)
+                
+                results["final_status"] = f"transition_error: {str(e)}"
+                break
             
             # STEP 4: Mission Completion Check
             # Check mission completion

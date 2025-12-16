@@ -58,8 +58,12 @@ class MissionController:
         """
         self.mission = mission
         
-        # Validate requirements before instantiating
-        self._validate_requirements()
+        # ✨ CHANGED: Skip validation for composite missions
+        # Composite missions validate per-step at execution time
+        if mission.type != 'composite_mission':
+            self._validate_requirements()
+        else:
+            logger.info("[VALIDATION] Composite mission - per-step validation at runtime")
         
         # Instantiate appropriate mission class
         self._mission_instance = self._create_mission_instance()
@@ -68,12 +72,6 @@ class MissionController:
     
     def _validate_requirements(self) -> None:
         """Validate mission requirements using validator."""
-        # Skip validation for composite missions (steps validated individually)
-        if self.mission.type == 'composite_mission':
-            logger.info("[VALIDATION] Composite mission - skipping global validation")
-            return
-        
-        # EXISTING: Validate simple missions
         MissionValidator.validate_mission(
             self.mission.type,
             target_class=getattr(self.mission, 'target_class', None)

@@ -3,6 +3,7 @@ Composite Mission Module
 State machine executor for multi-step missions with conditional branching.
 """
 
+import os
 import time
 import logging
 from enum import Enum
@@ -18,10 +19,11 @@ from multi_function_agent._robot_vision_controller.core.mission_controller.missi
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# Mission State Enumeration
-# =============================================================================
+class MissionTransitionError(Exception):
+    """Raised when transition between steps fails validation."""
+    pass
 
+# Mission State Enumeration
 class CompositeState(Enum):
     """States for composite mission execution."""
     INIT = "init"
@@ -230,6 +232,103 @@ class CompositeMission(BaseMission):
             f"[COMPOSITE] Initialized: {len(self.steps)} steps, "
             f"starting with '{self.current_step_id}'"
         )
+
+    def _validate_step_requirements(self, step_id: str):
+        """
+        Validate requirements for a specific step before starting.
+        
+        Args:
+            step_id: ID of step to validate
+            
+        Raises:
+            MissionTransitionError: If requirements not met
+        """
+        step_config = self.steps[step_id]
+        step_type = step_config.type
+        
+        logger.info(f"[VALIDATION] Checking requirements for step '{step_id}' ({step_type})")
+        
+        # Import validator
+        from multi_function_agent._robot_vision_controller.core.mission_controller.mission_validator.mission_validator import (
+            MissionValidator,
+            MissionRequirementsError
+        )
+        
+        try:
+            if step_type == 'explore_area':
+                # Validate SLAM availability
+                MissionValidator.validate_explore_mission()
+            
+            elif step_type == 'patrol_laps':
+                # Validate map exists
+                self._validate_patrol_requirements()
+            
+            elif step_type == 'follow_target':
+                # Validate target class
+                target_class = step_config.parameters.get('target_class')
+                MissionValidator.validate_follow_mission(target_class=target_class)
+            
+            logger.info(f"[VALIDATION] ✅ Step '{step_id}' requirements met")
+            
+        except MissionRequirementsError as e:
+            raise MissionTransitionError(
+                f"Step '{step_id}' ({step_type}) requirements not met: {e}"
+            )
+    
+    def _validate_explore_completion(self):
+        """
+        Validate explore step completed successfully with map saved.
+        
+        Raises:
+            MissionTransitionError: If map not found or invalid
+        """
+        # Check map files exist
+        map_path = os.path.expanduser("~/my_map")
+        yaml_file = f"{map_path}.yaml"
+        pgm_file = f"{map_path}.pgm"
+        
+        if not (os.path.exists(yaml_file) and os.path.exists(pgm_file)):
+            raise MissionTransitionError(
+                "Explore step completed but map not found. "
+                "SLAM may have failed or not been started. "
+                f"Expected files: {yaml_file}, {pgm_file}"
+            )
+        
+        # Validate file sizes (sanity check)
+        yaml_size = os.path.getsize(yaml_file)
+        pgm_size = os.path.getsize(pgm_file)
+        
+        if yaml_size < 100 or pgm_size < 1000:
+            raise MissionTransitionError(
+                f"Map files too small (YAML={yaml_size}B, PGM={pgm_size}B). "
+                f"Map may be incomplete or corrupted."
+            )
+        
+        logger.info(
+            f"[VALIDATION] ✅ Explore map validated: "
+            f"YAML={yaml_size}B, PGM={pgm_size}B"
+        )
+    
+    def _validate_patrol_requirements(self):
+        """
+        Validate patrol step has required map file.
+        
+        Raises:
+            MissionTransitionError: If map not found
+        """
+        map_path = os.path.expanduser("~/my_map")
+        yaml_file = f"{map_path}.yaml"
+        
+        if not os.path.exists(yaml_file):
+            raise MissionTransitionError(
+                f"Patrol requires map file at {yaml_file}. "
+                f"Run explore mission first or create map manually:\n"
+                f"  1. Start SLAM: ros2 launch slam_toolbox online_async_launch.py\n"
+                f"  2. Drive around: ros2 run turtlebot3_teleop teleop_keyboard\n"
+                f"  3. Save map: ros2 run nav2_map_server map_saver_cli -f ~/my_map"
+            )
+        
+        logger.info(f"[VALIDATION] ✅ Patrol map found: {yaml_file}")
     
     def _initialize_state(self) -> Dict:
         """Initialize composite mission state."""
@@ -297,6 +396,13 @@ class CompositeMission(BaseMission):
         
         logger.info(f"[COMPOSITE] Starting step '{self.current_step_id}' ({step_type})")
         
+        try:
+            self._validate_step_requirements(self.current_step_id)
+        except MissionTransitionError as e:
+            logger.error(f"[COMPOSITE] Step validation failed: {e}")
+            self.composite_state = CompositeState.ERROR
+            raise
+
         # MODIFIED: Import and use dedicated step classes
         if step_type in ['explore_area', 'follow_target', 'patrol_laps']:
             # Delegate to existing mission classes
@@ -407,8 +513,22 @@ class CompositeMission(BaseMission):
         return next_step
     
     def _transition_to_step(self, step_id: str):
-        """Transition to next step."""
+        """Transition to next step WITH POST-VALIDATION."""
+        current_step = self.steps[self.current_step_id]
+        
         logger.info(f"[COMPOSITE] Transition: '{self.current_step_id}' → '{step_id}'")
+        
+        # Post-step validation
+        try:
+            if current_step.type == 'explore_area':
+                # Just finished explore → ensure map saved
+                logger.info("[COMPOSITE] Validating explore completion...")
+                self._validate_explore_completion()
+        
+        except MissionTransitionError as e:
+            logger.error(f"[COMPOSITE] Post-step validation failed: {e}")
+            self.composite_state = CompositeState.ERROR
+            raise
         
         # Cleanup current step
         self.sub_mission = None
@@ -416,6 +536,8 @@ class CompositeMission(BaseMission):
         
         # Set new step
         self.current_step_id = step_id
+        
+        # Start next step (with pre-validation inside _start_current_step)
         self._start_current_step()
     
     def _check_completion(self) -> bool:
