@@ -111,7 +111,22 @@ async def parse_mission_from_prompt(user_prompt: str, builder) -> Mission:
             # Fallback to minimal prompt if file missing
             system_prompt = "You are a robot mission parser. Convert natural language to JSON with fields: type, target_class, parameters, description. Mission types: follow_target, patrol_laps, explore_area."
 
-        user_message = f"Parse this command:\n{user_prompt}"
+        # Clean prompt trước khi gửi LLM
+        cleaned_prompt = user_prompt
+
+        # Remove RTSP URL setup phrase
+        import re
+        rtsp_pattern = r'control\s+robot\s+using\s+rtsp://[^\s]+\s+(and\s+)?'
+        cleaned_prompt = re.sub(rtsp_pattern, '', cleaned_prompt, flags=re.IGNORECASE)
+
+        user_message = f"""Parse this robot mission into steps:
+
+        Original command: {user_prompt}
+
+        Mission to parse: {cleaned_prompt}
+
+        IMPORTANT: Ignore any RTSP/stream setup - focus only on robot actions.
+        Start with the first actual robot movement/task."""
         
         # Get LLM config from builder (reuse workflow config)
         try:
@@ -124,11 +139,18 @@ async def parse_mission_from_prompt(user_prompt: str, builder) -> Mission:
             temperature = 0.0
             logger.warning("Using fallback LLM config")
         
-        # Initialize LLM with config
+        # Detect if likely composite (heuristic)
+        is_likely_composite = any(
+            keyword in user_prompt.lower() 
+            for keyword in ['then', 'first', 'after', 'if', ',']
+        )
+
+        max_tokens = 500 if is_likely_composite else 100  # Tăng lên cho composite
+
         llm = ChatNVIDIA(
             model=model_name,
             temperature=temperature,
-            max_tokens=100  # Keep short for mission parsing
+            max_tokens=max_tokens
         )
         
         # Prepare messages with system prompt

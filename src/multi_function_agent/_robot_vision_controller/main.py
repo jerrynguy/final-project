@@ -212,8 +212,8 @@ async def _robot_vision_controller(
         
         # Initialize SLAM for explore mission
         slam_controller = None
-        if mission_controller.mission.type == 'explore_area':
-            logger.info("[SLAM] Starting mapping...")
+        if mission_controller.has_explore_step():
+            logger.info("[SLAM] Starting mapping (composite mission aware)...")
             slam_controller = SLAMController()
             
             slam_started = slam_controller.start_slam()
@@ -454,7 +454,7 @@ async def run_robot_control_loop(
             } if frame is not None else None
 
             #Extract full LiDAR scan from vision analyzer if available
-            full_lidar_scan = vision_analyzer.get('full_lidar_scan', None)
+            full_lidar_scan = vision_analysis.get('full_lidar_scan', None)
 
             if slam_controller and slam_controller.is_running:
                 slam_controller.maybe_auto_save()
@@ -498,7 +498,7 @@ async def run_robot_control_loop(
                 robot_pos is not None and
                 robot_interface.nav2_interface and
                 not robot_interface.nav2_interface.is_navigating() and
-                mission_controller.mission.type != 'explore_area'
+                mission_controller.get_current_mission_type() != 'explore_area'
             )
 
             if can_use_nav2:

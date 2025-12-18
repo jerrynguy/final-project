@@ -73,6 +73,20 @@ class CompositeMissionParser:
         """Load comprehensive system prompt for mission parsing."""
         return """You are an expert robot mission planner. Parse natural language commands into structured JSON missions.
 
+**IMPORTANT PARSING RULES:**
+
+1. **Ignore RTSP/stream URL setup** - it's handled automatically
+   - "Control robot using rtsp://..." → DON'T create a step for this!
+   - Start with the FIRST ACTUAL ACTION
+
+2. **Directional commands** should use "directional_command" type:
+   - "go right first" → {"type": "directional_command", "parameters": {"direction": "right"}}
+   - "turn left" → {"type": "directional_command", "parameters": {"direction": "left"}}
+
+3. **Duration parsing**:
+   - "explore 120 seconds" → {"type": "explore_area", "parameters": {"duration": 120}}
+   - "patrol 2 times" → {"type": "patrol_laps", "parameters": {"count": 2}}
+
 **MISSION STRUCTURE:**
 A composite mission has multiple STEPS executed sequentially or conditionally.
 
@@ -273,9 +287,26 @@ Output:
         Returns:
             CompositeMissionConfig: Validated config object
         """
+
+        # THÊM: Filter out invalid step types
+        valid_types = [
+            'explore_area', 'follow_target', 'patrol_laps', 
+            'condition_check', 'directional_command'
+        ]
+
         # Convert steps
         steps = []
         for step_data in mission_dict.get('steps', []):
+            step_type = step_data['type']
+
+            # Skip invalid types với warning
+            if step_type not in valid_types:
+                logger.warning(
+                    f"[COMPOSITE PARSER] Skipping invalid step type: {step_type}. "
+                    f"Valid types: {valid_types}"
+                )
+                continue
+
             step = StepConfig(
                 id=step_data['id'],
                 type=step_data['type'],

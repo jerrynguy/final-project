@@ -69,6 +69,42 @@ class MissionController:
         self._mission_instance = self._create_mission_instance()
         
         logger.info(f"[MISSION] Controller initialized: {mission.description}")
+
+    def get_current_mission_type(self) -> str:
+        """
+        Get current effective mission type.
+        For composite missions, returns current step type.
+        """
+        if self.mission.type == 'composite_mission':
+            from multi_function_agent._robot_vision_controller.core.mission_controller.missions.composite_mission import CompositeMission
+            
+            if isinstance(self._mission_instance, CompositeMission):
+                current_step_id = self._mission_instance.current_step_id
+                current_step = self._mission_instance.steps.get(current_step_id)
+                
+                if current_step:
+                    return current_step.type
+        
+        return self.mission.type
+
+    def has_explore_step(self) -> bool:
+        """
+        Check if mission contains explore_area step.
+        Determines if SLAM needs to be initialized.
+        """
+        if self.mission.type == 'explore_area':
+            return True
+        
+        if self.mission.type == 'composite_mission':
+            from multi_function_agent._robot_vision_controller.core.mission_controller.missions.composite_mission import CompositeMission
+            
+            if isinstance(self._mission_instance, CompositeMission):
+                return any(
+                    step.type == 'explore_area' 
+                    for step in self._mission_instance.steps.values()
+                )
+        
+        return False
     
     def _validate_requirements(self) -> None:
         """Validate mission requirements using validator."""
@@ -118,10 +154,23 @@ class MissionController:
         """Delegate to mission instance."""
         return self._mission_instance.get_directive()
     
-    def process_frame(self, detected_objects=None, robot_pos=None, frame_info=None):
+    def process_frame(
+        self,
+        detected_objects=None,
+        robot_pos=None,
+        frame_info=None,
+        frame=None,
+        vision_analyzer=None,
+        full_lidar_scan=None
+    ):
         """Delegate to mission instance."""
         return self._mission_instance.process_frame(
-            detected_objects, robot_pos, frame_info
+            detected_objects,
+            robot_pos,
+            frame_info,
+            frame,
+            vision_analyzer,
+            full_lidar_scan
         )
     
     @property
