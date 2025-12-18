@@ -32,12 +32,11 @@ class StepConfig:
 @dataclass
 class ConditionConfig:
     """Configuration for conditional branching."""
-    type: str  # object_detected, timeout, distance_traveled, area_covered
-    parameters: Dict[str, Any] = field(default_factory=dict)
-    branch_true: str
-    branch_false: str
-    timeout: float = 30.0  # Default timeout for condition check
-
+    type: str 
+    branch_true: str 
+    branch_false: str  
+    parameters: Dict[str, Any] = field(default_factory=dict) 
+    timeout: float = 30.0  
 
 @dataclass
 class CompositeMissionConfig:

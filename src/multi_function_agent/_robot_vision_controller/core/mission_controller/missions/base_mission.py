@@ -74,18 +74,13 @@ class BaseMission(ABC):
         self,
         detected_objects: List[Dict] = None,
         robot_pos: Dict = None,
-        frame_info: Dict = None
+        frame_info: Dict = None,
+        frame = None,
+        vision_analyzer = None,
+        full_lidar_scan = None
     ) -> Dict:
         """
         Update mission state based on observations.
-        
-        Args:
-            detected_objects: List of YOLO detections
-            robot_pos: Robot position {x, y, theta}
-            frame_info: Frame metadata {width, height}
-            
-        Returns:
-            dict: Updated state
         """
         pass
     
@@ -115,10 +110,15 @@ class BaseMission(ABC):
         self,
         detected_objects: List[Dict] = None,
         robot_pos: Dict = None,
-        frame_info: Dict = None
+        frame_info: Dict = None,
+        frame = None,
+        vision_analyzer = None,
+        full_lidar_scan = None
     ) -> Dict:
         """Public: Update state."""
-        return self._update_state(detected_objects, robot_pos, frame_info)
+        return self._update_state(
+            detected_objects, robot_pos, frame_info, 
+            frame, vision_analyzer, full_lidar_scan)
     
     def check_completion(self) -> bool:
         """Public: Check completion."""
@@ -140,20 +140,18 @@ class BaseMission(ABC):
         self,
         detected_objects: List[Dict] = None,
         robot_pos: Dict = None,
-        frame_info: Dict = None
+        frame_info: Dict = None,
+        frame = None,
+        vision_analyzer = None,
+        full_lidar_scan = None
     ) -> Dict:
         """
         Process frame: update + check + directive in one call.
-        
-        Args:
-            detected_objects: YOLO detections
-            robot_pos: Robot position
-            frame_info: Frame metadata
-            
-        Returns:
-            dict: {state, completed, directive, progress}
         """
-        state = self.update_state(detected_objects, robot_pos, frame_info)
+        state = self.update_state(
+            detected_objects, robot_pos, frame_info, 
+            frame, vision_analyzer, full_lidar_scan
+        )
         completed = self.check_completion()
         directive = self.get_directive()
         

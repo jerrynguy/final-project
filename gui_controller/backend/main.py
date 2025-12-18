@@ -5,6 +5,7 @@ Run: uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
 import subprocess
 import asyncio
@@ -17,7 +18,17 @@ from datetime import datetime
 # CHANGED: Import ROS2Bridge
 from ros2_bridge import ROS2Bridge, OdomData, ScanData
 
-app = FastAPI(title="Robot Control API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    yield
+    
+    print("Shutting down...")
+    global ros2_bridge
+    if ros2_bridge:
+        ros2_bridge.stop()
+
+app = FastAPI(title="Robot Control API", lifespan=lifespan)
 
 # CORS để React có thể connect
 app.add_middleware(
@@ -365,14 +376,6 @@ async def terminal_stream(websocket: WebSocket, session_id: str):
             })
     except WebSocketDisconnect:
         pass
-
-# CHANGED: Cleanup on shutdown
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up resources on shutdown"""
-    global ros2_bridge
-    if ros2_bridge:
-        ros2_bridge.stop()
 
 if __name__ == "__main__":
     import uvicorn

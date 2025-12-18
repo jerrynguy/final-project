@@ -453,6 +453,9 @@ async def run_robot_control_loop(
                 'height': frame.shape[0]
             } if frame is not None else None
 
+            #Extract full LiDAR scan from vision analyzer if available
+            full_lidar_scan = vision_analyzer.get('full_lidar_scan', None)
+
             if slam_controller and slam_controller.is_running:
                 slam_controller.maybe_auto_save()
 
@@ -460,7 +463,10 @@ async def run_robot_control_loop(
                 mission_result = mission_controller.process_frame(
                     detected_objects=detected_objects,
                     robot_pos=robot_pos,
-                    frame_info=frame_info
+                    frame_info=frame_info,
+                    frame=frame,
+                    vision_analyzer=vision_analyzer,
+                    full_lidar_scan=full_lidar_scan
                 )
             except MissionTransitionError as e:
                 # Composite mission transition failed

@@ -28,7 +28,6 @@ nemo-agent-toolkit/
         │           ├── core/                                   # 🧠 Core Logic
         │           │   ├── goal_parser.py                      # ✏️ Simple mission parser
         │           │   ├── composite_mission_parser.py         # Composite mission parser
-        │           │   ├── interactive_clarifier.py            # Ambiguity detection + questions
         │           │   ├── models.py                           # YOLO model manager
         │           │   ├── query_extractor.py                  # Prompt parameter extraction
         │           │   │

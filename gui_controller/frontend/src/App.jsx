@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Send, PlayCircle, Terminal, Wifi, WifiOff, Circle, Navigation, Radar, Map } from 'lucide-react';
-import ClarificationModal from './components/ClarificationModal';
-import { useMissionClarification } from './hooks/useMissionClarification';
 
 const API_URL = 'http://localhost:8000';
 
@@ -34,14 +32,6 @@ export default function RobotControlUI() {
     'rtsp://192.168.1.100:8554/camera1',
     'custom'
   ];
-
-  const {
-    isWaitingForResponse,
-    currentQuestion,
-    askClarification,
-    submitAnswer,
-    cancelClarification
-  } = useMissionClarification();
 
   // WebSocket connection (command channel)
   useEffect(() => {
@@ -688,14 +678,6 @@ export default function RobotControlUI() {
           {/* Closing tags và CSS */}
           </div>
         </div>
-
-        {/* Clarification Modal */}
-        <ClarificationModal
-          isOpen={isWaitingForResponse}
-          question={currentQuestion}
-          onAnswer={submitAnswer}
-          onCancel={cancelClarification}
-        />
 
         <style jsx>{`
           @keyframes fade-in {

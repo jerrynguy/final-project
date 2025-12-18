@@ -201,32 +201,22 @@ class CompositeMission(BaseMission):
     """
     
     def __init__(self, config: MissionConfig):
-        """
-        Initialize composite mission.
-        
-        Args:
-            config: Mission config with composite_config attribute
-        """
-        super().__init__(config)
-        
-        # Composite-specific config
+        """Initialize composite mission."""
+        # Extract composite config FIRST
         self.composite_config = config.parameters.get('composite_config')
         if not self.composite_config:
             raise ValueError("Composite mission requires composite_config")
         
-        # Step registry
+        # Initialize attributes BEFORE super().__init__()
         self.steps = {step.id: step for step in self.composite_config.steps}
-        
-        # Current execution state
         self.current_step_id = self.composite_config.steps[0].id
         self.current_executor = None
-        self.sub_mission = None  # For explore/follow/patrol steps
-        
-        # Execution context (shared between steps)
+        self.sub_mission = None
         self.execution_context = {}
-        
-        # State machine
         self.composite_state = CompositeState.INIT
+        
+        # NOW call parent constructor
+        super().__init__(config)
         
         logger.info(
             f"[COMPOSITE] Initialized: {len(self.steps)} steps, "
@@ -344,7 +334,10 @@ class CompositeMission(BaseMission):
         self,
         detected_objects: List[Dict] = None,
         robot_pos: Dict = None,
-        frame_info: Dict = None
+        frame_info: Dict = None,
+        frame = None,
+        vision_analyzer = None,
+        full_lidar_scan = None
     ) -> Dict:
         """Execute state machine logic."""
         
@@ -355,7 +348,8 @@ class CompositeMission(BaseMission):
         elif self.composite_state == CompositeState.EXECUTING:
             # Execute current step
             step_result = self._execute_current_step(
-                detected_objects, robot_pos, frame_info
+                detected_objects, robot_pos, frame_info,
+                frame, vision_analyzer, full_lidar_scan
             )
             
             # Check completion
@@ -462,14 +456,18 @@ class CompositeMission(BaseMission):
         self,
         detected_objects,
         robot_pos,
-        frame_info
+        frame_info,
+        frame,
+        vision_analyzer,
+        full_lidar_scan
     ) -> Dict:
         """Execute current step and return result."""
         
         # Execute sub-mission
         if self.sub_mission:
             return self.sub_mission.process_frame(
-                detected_objects, robot_pos, frame_info
+                detected_objects, robot_pos, frame_info,
+                frame, vision_analyzer, full_lidar_scan
             )
         
         # Execute custom executor

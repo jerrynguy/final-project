@@ -71,7 +71,10 @@ class ConditionCheckMission(BaseMission):
         self,
         detected_objects: List[Dict] = None,
         robot_pos: Dict = None,
-        frame_info: Dict = None
+        frame_info: Dict = None,
+        frame = None,
+        vision_analyzer = None,
+        full_lidar_scan = None
     ) -> Dict:
         """Evaluate condition periodically."""
         
@@ -90,7 +93,9 @@ class ConditionCheckMission(BaseMission):
         
         # Evaluate condition based on type
         if self.condition_type == 'object_detected':
-            self.condition_result = self._check_object_detected(detected_objects)
+            self.condition_result = self._check_object_detected(
+                detected_objects, frame, vision_analyzer,full_lidar_scan
+            )
         
         elif self.condition_type == 'timeout':
             # Timeout condition just waits - always returns False
@@ -124,7 +129,13 @@ class ConditionCheckMission(BaseMission):
         
         return self.state
     
-    def _check_object_detected(self, detected_objects: Optional[List[Dict]]) -> Optional[bool]:
+    def _check_object_detected(
+            self, 
+            detected_objects: Optional[List[Dict]],
+            frame = None,
+            vision_analyzer = None,
+            full_lidar_scan = None
+        ) -> Optional[bool]:
         """Check if target object detected."""
         target_class = self.condition_params.get('target_class')
         
@@ -132,18 +143,31 @@ class ConditionCheckMission(BaseMission):
             logger.error("[CONDITION] object_detected requires target_class")
             return False
         
-        if not detected_objects:
-            return None  # Keep checking
-        
-        # Check if target in detections
-        detected = any(
-            obj.get('class') == target_class 
-            for obj in detected_objects
-        )
-        
-        if detected:
-            logger.info(f"[CONDITION] ✓ Detected: {target_class}")
-            return True
+        # Priority 1: Use pre-detected objects from main.py
+        if detected_objects:
+            detected = any(
+                obj.get('class') == target_class 
+                for obj in detected_objects    
+            )
+
+            if detected:
+                logger.info(f"[CONDITION] ✓ Detected target object '{target_class}'")
+                return True
+            
+        # Priority 2: On-demand detection if frame + analyzer if available
+        if frame is not None and vision_analyzer is not None:
+            logger.info(f"[CONDITION] Running on-demand YOLO for: {target_class}")
+            analysis_results = vision_analyzer.analyze_frame(frame, full_lidar_scan=full_lidar_scan)
+
+            detected_now = vision_analyzer.detect_target_objects(
+                frame, target_class,
+                confident_threshold=0.6,
+                full_lidar_scan=full_lidar_scan
+            )
+
+            if detected_now:
+                logger.info(f"[CONDITION] ✓ Detected target object '{target_class}' (on-demand)")
+                return True
         
         return None  # Keep checking
     

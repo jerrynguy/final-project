@@ -42,7 +42,10 @@ class ExploreMission(BaseMission):
         self,
         detected_objects: List[Dict] = None,
         robot_pos: Dict = None,
-        frame_info: Dict = None
+        frame_info: Dict = None,
+        frame = None,
+        vision_analyzer = None,
+        full_lidar_scan = None
     ) -> Dict:
         """Update exploration state."""
         elapsed = self.get_elapsed_time()
