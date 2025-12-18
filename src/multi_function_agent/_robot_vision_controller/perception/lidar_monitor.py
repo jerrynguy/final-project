@@ -107,7 +107,11 @@ class LidarSafetyMonitor:
             'reason': 'cooldown_pause'
         }
     
-    def check_critical_abort(self, lidar_data) -> Dict:
+    def check_critical_abort(
+            self,
+            lidar_data,
+            robot_pos: Optional[Dict] = None
+        ) -> Dict:
         """
         Check for critical distance with smart directional logic and recovery.
         """
@@ -174,7 +178,8 @@ class LidarSafetyMonitor:
                         'command': self._smart_recovery_command(
                             angle, 
                             clearances, 
-                            obstacles_with_angles
+                            obstacles_with_angles,
+                            robot_pos
                         ),
                         'min_distance': distance,
                         'obstacle_angle': angle,
@@ -238,6 +243,46 @@ class LidarSafetyMonitor:
     # =========================================================================
     # Helper Methods
     # =========================================================================
+
+    def _is_truly_stuck(
+        self, 
+        current_pose: Dict,
+        history_window: int = 5
+    ) -> bool:
+        """
+        Detect if robot is stuck (same position for N iterations).
+        
+        Args:
+            current_pose: Current robot position
+            history_window: Number of iterations to check
+            
+        Returns:
+            bool: True if stuck
+        """
+        # Track position history
+        if not hasattr(self, '_position_history'):
+            self._position_history = []
+        
+        self._position_history.append((current_pose['x'], current_pose['y']))
+        
+        # Keep only recent history
+        if len(self._position_history) > history_window:
+            self._position_history = self._position_history[-history_window:]
+        
+        # Check if stuck (variance < 5cm)
+        if len(self._position_history) >= history_window:
+            import numpy as np
+            positions = np.array(self._position_history)
+            variance = np.var(positions, axis=0).sum()
+            
+            is_stuck = variance < 0.0025  # 5cm variance threshold
+            
+            if is_stuck:
+                logger.error(f"[STUCK DETECTED] Variance: {variance:.6f} - Same position for {history_window} iterations!")
+            
+            return is_stuck
+        
+        return False
     
     def _get_obstacles_with_angles(self, lidar_data) -> List[Tuple[float, float]]:
         """Extract obstacles with their angles from LIDAR scan."""
@@ -391,48 +436,44 @@ class LidarSafetyMonitor:
 
     def _emergency_extraction_command(self, clearances: Dict) -> Dict:
         """
-        Generate emergency extraction command for dead-end situations.
+        AGGRESSIVE escape for truly stuck situations.
         
-        Strategy: Gentle rotation toward least-blocked direction.
-        Much slower than normal recovery to avoid oscillation.
-        
-        Args:
-            clearances: Current clearance dict
-            
-        Returns:
-            dict: Gentle extraction command
+        Strategy:
+        1. Find least-blocked direction
+        2. FORCE move that direction (ignore minor obstacles)
+        3. Use higher velocity to push through
         """
         left = clearances.get('left', 0)
         right = clearances.get('right', 0)
         front = clearances.get('front', 0)
         
-        # Find least-blocked direction
-        max_clear = max(left, right, front)
+        # Find best escape direction
+        best_clearance = max(left, right, front)
         
-        if max_clear == left:
-            angular = 0.4  # GENTLE left rotation
+        if best_clearance == left:
+            angular = 0.8  # Strong left
             direction = "left"
-        elif max_clear == right:
-            angular = -0.4  # GENTLE right rotation
+        elif best_clearance == right:
+            angular = -0.8  # Strong right
             direction = "right"
         else:
-            # Front is best - try slight rotation to find opening
-            angular = 0.4 if left > right else -0.4
+            # Front is best - try gentle wiggle
+            angular = 0.6 if left > right else -0.6
             direction = "wiggle"
         
-        logger.warning(
-            f"[EMERGENCY EXTRACTION] Gentle rotate {direction} "
-            f"(max clearance: {max_clear:.2f}m)"
+        logger.error(
+            f"[EMERGENCY EXTRACTION] AGGRESSIVE escape {direction} "
+            f"(best clearance: {best_clearance:.2f}m)"
         )
         
         return {
             'action': 'emergency_extraction',
             'parameters': {
-                'linear_velocity': 0.0,  # Pure rotation
+                'linear_velocity': 0.0,  # Pure rotation first
                 'angular_velocity': angular,
-                'duration': 0.4  # SHORT duration to check result
+                'duration': 1.0  # LONGER duration
             },
-            'reason': f'dead_end_extraction_{direction}'
+            'reason': f'stuck_extraction_{direction}'
         }
     
     # =========================================================================
@@ -442,7 +483,8 @@ class LidarSafetyMonitor:
         self, 
         obstacle_angle: float, 
         clearances: Dict,
-        obstacles_with_angles: List[Tuple[float, float]]  # CHANGED: Thêm param
+        obstacles_with_angles: List[Tuple[float, float]],
+        robot_pos: Optional[Dict] = None
     ) -> Dict:
         """
         Generate smart recovery command with rear collision prevention.
@@ -456,11 +498,10 @@ class LidarSafetyMonitor:
         # Detect tight corners (both sides blocked)
         is_tight_corner = left_clear < 0.3 and right_clear < 0.3
 
-        # PRIORITY 0: Dead-end detection (all sides critically blocked)
-        # =======================================================
-        if self._is_dead_end(clearances, rear_clear):
+        # PRIORITY 0: Check if truly stuck
+        if robot_pos and self._is_truly_stuck(robot_pos):
             return self._emergency_extraction_command(clearances)
-    
+        
         # =======================================================================
         # STRATEGY 1: ROTATE-ONLY if rear blocked or tight corner
         # =======================================================================

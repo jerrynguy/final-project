@@ -207,6 +207,8 @@ class CompositeMission(BaseMission):
         if not self.composite_config:
             raise ValueError("Composite mission requires composite_config")
         
+        self._pre_validate_requirements()
+
         # Initialize attributes BEFORE super().__init__()
         self.steps = {step.id: step for step in self.composite_config.steps}
         self.current_step_id = self.composite_config.steps[0].id
@@ -222,6 +224,47 @@ class CompositeMission(BaseMission):
             f"[COMPOSITE] Initialized: {len(self.steps)} steps, "
             f"starting with '{self.current_step_id}'"
         )
+
+    def _pre_validate_requirements(self):
+        """
+        Pre-validate requirements for ALL steps before mission starts.
+        Ensures SLAM/map setup is done BEFORE control loop begins.
+        """
+        from multi_function_agent._robot_vision_controller.core.mission_controller.mission_validator.mission_validator import (
+            MissionValidator,
+            MissionRequirementsError
+        )
+        
+        for step in self.composite_config.steps:
+            step_type = step.type
+            
+            # Check explore steps (need SLAM confirmation)
+            if step_type == 'explore_area':
+                logger.info(f"[PRE-VALIDATION] Step '{step.id}' requires SLAM")
+                try:
+                    MissionValidator.validate_explore_mission()
+                    logger.info(f"[PRE-VALIDATION] ✅ SLAM confirmed for '{step.id}'")
+                except MissionRequirementsError as e:
+                    raise MissionTransitionError(
+                        f"Composite mission cannot start: Step '{step.id}' requires SLAM. {e}"
+                    )
+            
+            # Check patrol steps (need map)
+            elif step_type == 'patrol_laps':
+                logger.info(f"[PRE-VALIDATION] Step '{step.id}' requires map")
+                try:
+                    self._validate_patrol_requirements()
+                    logger.info(f"[PRE-VALIDATION] ✅ Map found for '{step.id}'")
+                except MissionRequirementsError as e:
+                    # Map might not exist yet (will be created by explore step)
+                    # Check if explore step comes before patrol
+                    explore_steps = [s for s in self.composite_config.steps if s.type == 'explore_area']
+                    if not explore_steps:
+                        raise MissionTransitionError(
+                            f"Step '{step.id}' requires map but no explore step found. {e}"
+                        )
+                    else:
+                        logger.warning(f"[PRE-VALIDATION] Map not found yet - will be created by explore step")
 
     def _validate_step_requirements(self, step_id: str):
         """

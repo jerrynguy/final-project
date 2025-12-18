@@ -266,12 +266,27 @@ class NavigationReasoner:
         """
         # Extract direction from directive
         # Format: 'directional_move_forward' → 'forward'
-        parts = directive.split('_')
+        parts = directive.split('_', 1)
+
         if len(parts) < 2:
             logger.error(f"Invalid directional directive: {directive}")
             return self.command_factory.create_forward_command(5)
         
-        command_type = parts[-1]  # 'forward', 'left', 'right', 'backward'
+        full_command = parts[1]  # 'turn_right'
+        
+        if 'forward' in full_command:
+            command_type = 'forward'
+        elif 'backward' in full_command:
+            command_type = 'backward'
+        elif 'left' in full_command:
+            command_type = 'left'
+        elif 'right' in full_command:
+            command_type = 'right'
+        else:
+            logger.error(f"Unknown command: {full_command}")
+            return self.command_factory.create_forward_command(5)
+        
+        logger.info(f"[DIRECTIONAL] Parsed: {directive} → {command_type}")
         
         safety_score = vision_analysis.get('safety_score', 5)
         

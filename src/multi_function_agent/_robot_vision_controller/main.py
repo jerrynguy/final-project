@@ -386,7 +386,10 @@ async def run_robot_control_loop(
 
             # STEP 1: Critical Abort Check (SINGLE LAYER)
             # CHANGED: Unified single-layer safety check
-            abort_result = safety_monitor.check_critical_abort(lidar_snapshot)
+            abort_result = safety_monitor.check_critical_abort(
+                lidar_snapshot,
+                robot_pos=robot_pos
+                )
             
             if abort_result['abort']:
                 logger.error(
