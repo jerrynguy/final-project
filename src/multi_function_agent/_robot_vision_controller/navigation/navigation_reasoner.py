@@ -15,7 +15,7 @@ from multi_function_agent._robot_vision_controller.utils.movement_commands impor
     NavigationParameters
 )
 from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator, SafetyThresholds
-from multi_function_agent._robot_vision_controller.perception.frontier_detector import FrontierDetector
+from multi_function_agent._robot_vision_controller.perception.detector.frontier_detector import FrontierDetector
 
 logger = logging.getLogger(__name__)
 

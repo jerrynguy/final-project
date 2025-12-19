@@ -341,25 +341,35 @@ class CompositeMission(BaseMission):
         )
     
     def _validate_patrol_requirements(self):
-        """
-        Validate patrol step has required map file.
+        """Validate patrol has map - CHECK MULTIPLE PATHS."""
         
-        Raises:
-            MissionTransitionError: If map not found
-        """
-        map_path = os.path.expanduser("~/my_map")
-        yaml_file = f"{map_path}.yaml"
+        # FIXED: Check multiple possible paths
+        possible_paths = [
+            "/workspace/mounted_code/maps/my_map.yaml",
+            "/workspace/persistent_data/maps/my_map.yaml",
+            "/root/maps/my_map.yaml",
+            "/root/my_map.yaml",
+            os.path.expanduser("~/my_map.yaml"),
+        ]
         
-        if not os.path.exists(yaml_file):
-            raise MissionTransitionError(
-                f"Patrol requires map file at {yaml_file}. "
-                f"Run explore mission first or create map manually:\n"
-                f"  1. Start SLAM: ros2 launch slam_toolbox online_async_launch.py\n"
-                f"  2. Drive around: ros2 run turtlebot3_teleop teleop_keyboard\n"
-                f"  3. Save map: ros2 run nav2_map_server map_saver_cli -f ~/my_map"
-            )
+        for map_path in possible_paths:
+            if os.path.exists(map_path):
+                logger.info(f"[VALIDATION] ✅ Found map: {map_path}")
+                return  # Success
         
-        logger.info(f"[VALIDATION] ✅ Patrol map found: {yaml_file}")
+        # None found - error
+        logger.error("[VALIDATION] Map search paths:")
+        for path in possible_paths:
+            logger.error(f"  ❌ {path}")
+        
+        raise MissionTransitionError(
+            f"Patrol requires map but not found in any location.\n"
+            f"Searched: {', '.join(possible_paths[:3])}\n\n"
+            f"Fix:\n"
+            f"1. Ensure explore mission completed successfully\n"
+            f"2. Check SLAM was running during explore\n"
+            f"3. Verify map saved to persistent storage"
+        )
     
     def _initialize_state(self) -> Dict:
         """Initialize composite mission state."""
