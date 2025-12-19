@@ -31,10 +31,7 @@ def suppress_ffmpeg_stderr():
         sys.stderr.close()
         sys.stderr = original_stderr
 
-# =============================================================================
 # Stream Information Data Structure
-# =============================================================================
-
 @dataclass
 class StreamInfo:
     """
@@ -55,11 +52,7 @@ class StreamInfo:
     total_frames: int = 0
     dropped_frames: int = 0
 
-
-# =============================================================================
 # RTSP Stream Handler
-# =============================================================================
-
 class RTSPStreamHandler:
     """
     Manages RTSP video stream with robust error handling.

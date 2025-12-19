@@ -9,10 +9,7 @@ import numpy as np
 from typing import Tuple
 
 
-# =============================================================================
 # Fast Frame Processor
-# =============================================================================
-
 class FastFrameProcessor:
     """
     Fast image preprocessing utilities optimized for real-time navigation.

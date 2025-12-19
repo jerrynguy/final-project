@@ -30,9 +30,7 @@ class IntegrationTester:
         self.ros2_node = None
         self.robot_interface = None
     
-    # =========================================================================
     # LAYER 1: ROS2 Bridge Test
-    # =========================================================================
     def test_ros2_bridge(self) -> bool:
         """Test ROS2 subprocess bridge connectivity."""
         logger.info("\n" + "="*60)
@@ -87,11 +85,7 @@ class IntegrationTester:
             self.results['ros2_bridge'] = False
             return False
     
-    # =========================================================================
     # LAYER 2: Nav2 Connection Test
-    # =========================================================================
-    # Line 295-335: REPLACE toàn bộ test_nav2_connection()
-
     async def test_nav2_connection(self) -> bool:
         """Test Nav2 interface availability."""
         logger.info("\n" + "="*60)
@@ -140,9 +134,7 @@ class IntegrationTester:
             self.results['nav2_connection'] = False
             return False
     
-    # =========================================================================
     # LAYER 3: Movement Command Test
-    # =========================================================================
     async def test_movement_commands(self) -> bool:
         """Test basic robot movement commands."""
         logger.info("\n" + "="*60)
@@ -225,9 +217,7 @@ class IntegrationTester:
             self.results['movement_commands'] = False
             return False
     
-    # =========================================================================
     # LAYER 4: Mission Parsing Test
-    # =========================================================================
     async def test_mission_parsing(self) -> bool:
         """Test mission parsing from natural language."""
         logger.info("\n" + "="*60)
@@ -235,7 +225,7 @@ class IntegrationTester:
         logger.info("="*60)
         
         try:
-            from multi_function_agent._robot_vision_controller.core.goal_parser import Mission
+            from multi_function_agent._robot_vision_controller.core.parser.goal_parser import Mission
             from multi_function_agent._robot_vision_controller.core.mission_controller.mission_controller import MissionController
             
             # Mock builder (simplified)
@@ -273,10 +263,8 @@ class IntegrationTester:
             logger.error(f"❌ LAYER 4 FAILED: {e}")
             self.results['mission_parsing'] = False
             return False
-    
-    # =========================================================================
+
     # LAYER 5: Nav2 Goal Test (if available)
-    # =========================================================================
     async def test_nav2_goal(self) -> bool:
         """Test sending Nav2 navigation goal."""
         logger.info("\n" + "="*60)
@@ -338,9 +326,7 @@ class IntegrationTester:
             self.results['nav2_goal'] = False
             return False
     
-    # =========================================================================
     # Summary
-    # =========================================================================
     def print_summary(self):
         """Print test results summary."""
         logger.info("\n" + "="*60)
@@ -360,9 +346,7 @@ class IntegrationTester:
         
         return passed == total
     
-    # =========================================================================
     # Cleanup
-    # =========================================================================
     async def cleanup(self):
         """Cleanup resources."""
         logger.info("Cleaning up...")
@@ -382,11 +366,7 @@ class IntegrationTester:
         except Exception as e:
             logger.debug(f"Shutdown failed: {e}")
 
-
-# =============================================================================
 # Main Test Runner
-# =============================================================================
-
 async def run_tests():
     """Run all integration tests."""
     tester = IntegrationTester()

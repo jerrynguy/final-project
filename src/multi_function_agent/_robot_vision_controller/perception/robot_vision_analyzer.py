@@ -19,10 +19,7 @@ from multi_function_agent._robot_vision_controller.core.models import get_robot_
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
 # Robot Vision Analyzer
-# =============================================================================
-
 class RobotVisionAnalyzer:
     """
     Fast vision analysis pipeline for robot navigation (YOLO + LIDAR only).

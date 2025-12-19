@@ -45,10 +45,7 @@ class ROS2Bridge:
         
         logger.info("✅ ROS2Bridge initialized (daemon mode)")
     
-    # =========================================================================
-    # Public API - Nav2
-    # =========================================================================
-    
+    # Public API - Nav2    
     def send_nav2_goal(self, x: float, y: float, theta: float = 0.0) -> bool:
         """Send Nav2 goal via daemon."""
         try:
@@ -77,13 +74,6 @@ class ROS2Bridge:
     def save_slam_map(self, map_path: str, timeout: float = 10.0) -> bool:
         """
         Save SLAM map via daemon (blocking call).
-        
-        Args:
-            map_path: Path to save map (without extension)
-            timeout: Max wait time for response in seconds
-            
-        Returns:
-            bool: True if save successful
         """
         try:
             # Reset result and event
@@ -121,11 +111,8 @@ class ROS2Bridge:
         except Exception as e:
             logger.error(f"[BRIDGE] SLAM save request error: {e}")
             return False
-    
-    # =========================================================================
-    # Public API - Data
-    # =========================================================================
-    
+
+    # Public API - Data    
     def get_name(self):
         """Get node name (compatibility)."""
         return "ros2_bridge_daemon"
@@ -158,11 +145,8 @@ class ROS2Bridge:
         """Get SLAM map data."""
         with self._lock:
             return self._slam_map_cache
-    
-    # =========================================================================
-    # Public API - Commands
-    # =========================================================================
-    
+
+    # Public API - Commands    
     def publish_velocity(self, linear: float, angular: float):
         """Publish velocity command via file queue (non-blocking)."""
         try:
@@ -175,10 +159,7 @@ class ROS2Bridge:
         """Publish stop command."""
         self.publish_velocity(0.0, 0.0)
     
-    # =========================================================================
-    # Daemon Management
-    # =========================================================================
-    
+    # Daemon Management    
     def _start_monitor(self):
         """Start persistent daemon subprocess."""
         self._running = True
@@ -240,16 +221,10 @@ class ROS2Bridge:
         
         logger.warning("Daemon reader stopped")
     
-    # =========================================================================
-    # Helper Methods
-    # =========================================================================
-    
+    # Helper Methods    
     def _get_daemon_script_path(self) -> str:
         """
         Get path to daemon script.
-        
-        Returns:
-            str: Absolute path to ros2_daemon_script.py
         """
         # Try multiple locations
         possible_paths = [
@@ -268,9 +243,6 @@ class ROS2Bridge:
     def _create_daemon_environment(self) -> Dict[str, str]:
         """
         Create environment for daemon subprocess.
-        
-        Returns:
-            dict: Environment variables with ROS2 setup
         """
         env = os.environ.copy()
         
@@ -308,12 +280,6 @@ class ROS2Bridge:
     def _parse_daemon_message(self, line: str) -> Optional[Dict]:
         """
         Parse JSON message from daemon.
-        
-        Args:
-            line: Raw line from stdout
-            
-        Returns:
-            dict: Parsed message or None
         """
         try:
             return json.loads(line.strip())
@@ -350,12 +316,6 @@ class ROS2Bridge:
     def _create_lidar_data(self, data: Dict):
         """
         Create LaserScan-like object from data.
-        
-        Args:
-            data: LiDAR data dict
-            
-        Returns:
-            LaserScan-like object
         """
         class LaserScanData:
             def __init__(self, d):
@@ -371,9 +331,6 @@ class ROS2Bridge:
     def _handle_daemon_error(self, error: Exception):
         """
         Handle daemon communication error.
-        
-        Args:
-            error: Exception that occurred
         """
         logger.error(f"Daemon communication error: {error}")
         # Could add reconnection logic here
@@ -387,10 +344,7 @@ class ROS2Bridge:
         stderr_thread = threading.Thread(target=log_stderr, daemon=True)
         stderr_thread.start()
     
-    # =========================================================================
-    # Shutdown
-    # =========================================================================
-    
+    # Shutdown    
     def shutdown(self):
         """Shutdown bridge and daemon."""
         self._running = False
@@ -419,11 +373,7 @@ class ROS2Bridge:
         
         logger.info("✅ ROS2Bridge shutdown")
 
-
-# =============================================================================
 # Singleton
-# =============================================================================
-
 _bridge_instance = None
 _bridge_lock = threading.Lock()
 

@@ -213,9 +213,6 @@ class FrontierDetector:
         2. Distance must be < max_range * 0.8 (not hitting sensor limit = wall)
         3. Distance must be < max_frontier_distance (not too far)
         4. Not backward direction (abs(angle) < 150°)
-        
-        Returns:
-            bool: True if valid frontier
         """
         # Rule 1: Minimum clearance
         if distance < 1.5:
@@ -286,9 +283,6 @@ class FrontierDetector:
     def get_frontier_direction(self, frontier: Optional[Frontier]) -> Optional[str]:
         """
         Convert frontier to navigation direction.
-        
-        Returns:
-            str: 'left', 'right', 'forward', or None
         """
         if frontier is None or not frontier.is_valid:
             return None

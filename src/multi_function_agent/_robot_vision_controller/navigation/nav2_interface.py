@@ -8,10 +8,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
 # Navigation State
-# =============================================================================
-
 class NavigationState(Enum):
     """Nav2 navigation states."""
     IDLE = "idle"
@@ -20,10 +17,7 @@ class NavigationState(Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
-
-# =============================================================================
 # Nav2 Interface
-# =============================================================================
 class Nav2Interface:
     """
     Wrapper for Nav2 via ROS2Bridge daemon.

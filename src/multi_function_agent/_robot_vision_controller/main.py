@@ -35,7 +35,7 @@ from multi_function_agent._robot_vision_controller.core.mission_controller.missi
 from multi_function_agent._robot_vision_controller.core.mission_controller.missions.composite_mission import (
     MissionTransitionError 
 )
-from multi_function_agent._robot_vision_controller.core.goal_parser import (
+from multi_function_agent._robot_vision_controller.core.parser.goal_parser import (
     MissionParsingError,
     UnsupportedMissionError
 )
@@ -59,10 +59,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
 # Global Initialization
-# =============================================================================
-
 stream_handler = RTSPStreamHandler()
 safety_validator = SafetyValidator()
 model_manager = get_robot_vision_model_manager()
@@ -80,10 +77,7 @@ if preload_success:
 else:
     logger.error("❌ Failed to preload robot vision model")
 
-# =============================================================================
 # Main Controller Function
-# =============================================================================
-
 async def _robot_vision_controller(
     config: RobotVisionConfig, 
     builder: Builder
@@ -334,9 +328,7 @@ def _mission_directive_to_nav2_goal(
     
     return None
 
-# =============================================================================
 # Control Loop
-# =============================================================================
 async def run_robot_control_loop(
     stream_url: str,
     vision_analyzer: RobotVisionAnalyzer,
@@ -428,7 +420,7 @@ async def run_robot_control_loop(
                 await asyncio.sleep(0.1)
                 continue
 
-            # STEP 1.5: Stuck Detection
+            # STEP 2: Stuck Detection
             stuck_result = stuck_detector.update(
                 robot_pos,
                 action=navigation_decision.get('action', 'init')
@@ -458,7 +450,7 @@ async def run_robot_control_loop(
                 stuck_detector.reset()
                 continue
 
-            # STEP 2: Vision Analysis (Cached at 2Hz)
+            # STEP 3: Vision Analysis (Cached at 2Hz)
             # Vision analysis (cached at 2Hz)
             current_time = time.time()
             
@@ -490,7 +482,7 @@ async def run_robot_control_loop(
             PerformanceLogger.log_vision_analysis(vision_analysis, obstacles)
             results["obstacles_detected"].extend(obstacles)
             
-            # STEP 3: Mission State Update 
+            # STEP 4: Mission State Update 
             # Mission update
             robot_pos = robot_interface.ros_node.get_robot_pose()
             if robot_pos is None and hasattr(robot_interface, 'robot_status'):
@@ -534,7 +526,7 @@ async def run_robot_control_loop(
                 results["final_status"] = f"transition_error: {str(e)}"
                 break
             
-            # STEP 4: Mission Completion Check
+            # STEP 5: Mission Completion Check
             # Check mission completion
             if mission_result['completed']:
                 logger.info(f"✅ Mission complete: {mission_controller.mission.description}")
@@ -542,7 +534,7 @@ async def run_robot_control_loop(
                 results["final_status"] = "mission_completed"
                 break
 
-            # STEP 5: Nav2 Goal Planning (Patrol/Follow Only)
+            # STEP 6: Nav2 Goal Planning (Patrol/Follow Only)
             # Navigation decision
             mission_directive = mission_result['directive']
 
@@ -584,7 +576,7 @@ async def run_robot_control_loop(
                     else:
                         can_use_nav2 = False
 
-            # STEP 6: Manual Navigation Decision (Fallback)
+            # STEP 7: Manual Navigation Decision (Fallback)
             # Manual control fallback
             if not can_use_nav2 or not nav2_goal:
                 navigation_decision = navigation_reasoner.decide_next_action(
@@ -606,7 +598,7 @@ async def run_robot_control_loop(
                 
                 results["navigation_decisions"].append(navigation_decision)
 
-                # STEP 7: Command Execution (was STEP 10)
+                # STEP 8: Command Execution
                 command_success = await robot_interface.execute_command(navigation_decision)
                 PerformanceLogger.log_command_result(command_success)
                 

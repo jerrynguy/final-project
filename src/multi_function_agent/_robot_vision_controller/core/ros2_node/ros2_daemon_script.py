@@ -32,10 +32,7 @@ import select
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
 # QoS Configuration
-# =============================================================================
-
 def create_sensor_qos():
     """Create QoS profile for sensor data."""
     return QoSProfile(
@@ -44,11 +41,7 @@ def create_sensor_qos():
         depth=10
     )
 
-
-# =============================================================================
 # ROS2 Daemon Class
-# =============================================================================
-
 class ROS2Daemon:
     """
     Persistent ROS2 daemon for sensor streaming and command execution.
@@ -97,10 +90,7 @@ class ROS2Daemon:
             'available': server_available
         })
     
-    # =========================================================================
-    # Sensor Callbacks
-    # =========================================================================
-    
+    # Sensor Callbacks    
     def lidar_callback(self, msg):
         """Process LiDAR scan data."""
         data = {
@@ -161,12 +151,6 @@ class ROS2Daemon:
     def save_slam_map(self, map_path: str) -> bool:
         """
         Save SLAM map using DIRECT binary path (bypass ros2 CLI).
-        
-        Args:
-            map_path: Path to save map (without extension)
-            
-        Returns:
-            bool: True if save successful
         """
         import subprocess
         
@@ -212,11 +196,8 @@ class ROS2Daemon:
         except Exception as e:
             logger.error(f"[DAEMON] ❌ Map save error: {e}")
             return False
-    
-    # =========================================================================
-    # Command Processing
-    # =========================================================================
-    
+
+    # Command Processing    
     def read_cmd_queue(self):
         """Read velocity command from queue file."""
         try:
@@ -238,10 +219,7 @@ class ROS2Daemon:
         msg.angular.z = angular
         self.cmd_vel_pub.publish(msg)
     
-    # =========================================================================
-    # Nav2 Integration
-    # =========================================================================
-    
+    # Nav2 Integration    
     def send_nav2_goal(self, x, y, theta):
         """Send navigation goal to Nav2."""
         goal_msg = NavigateToPose.Goal()
@@ -315,10 +293,7 @@ class ROS2Daemon:
             return True
         return False
     
-    # =========================================================================
-    # Command Processing
-    # =========================================================================
-    
+    # Command Processing    
     def process_command(self, cmd):
         """Process command from stdin."""
         cmd_type = cmd.get('type')
@@ -345,10 +320,7 @@ class ROS2Daemon:
             
             logger.info(f"[DAEMON] SLAM save response sent: success={success}")
     
-    # =========================================================================
     # Main Loop
-    # =========================================================================
-    
     def spin(self):
         """Main daemon loop."""
         # Create timer for cmd_vel publishing (20Hz)
@@ -375,19 +347,12 @@ class ROS2Daemon:
             self.node.destroy_node()
             rclpy.shutdown()
     
-    # =========================================================================
-    # Helpers
-    # =========================================================================
-    
+    # Helpers    
     def _publish_message(self, data):
         """Publish message to stdout (for parent process)."""
         print(json.dumps(data), flush=True)
 
-
-# =============================================================================
 # Entry Point
-# =============================================================================
-
 if __name__ == '__main__':
     daemon = ROS2Daemon()
     daemon.spin()

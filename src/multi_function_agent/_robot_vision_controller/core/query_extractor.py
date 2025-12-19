@@ -9,9 +9,7 @@ from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
 # Query Parsing Utilities
-# =============================================================================
 class QueryExtractor:
     """Parser for extracting robot control parameters from natural language queries."""
     

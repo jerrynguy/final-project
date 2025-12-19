@@ -80,8 +80,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Thêm vào đầu file, sau các import ROS2 hiện có (dòng ~30)
-
 try:
     from multi_function_agent._robot_vision_controller.navigation.nav2_interface import (
         Nav2Interface,
@@ -95,11 +93,7 @@ except ImportError:
     NAV2_AVAILABLE = False
     logger.warning("Nav2Interface not available")
 
-
-# =============================================================================
 # Robot State Enumerations and Data Structures
-# =============================================================================
-
 class RobotState(Enum):
     """Robot operational states."""
     IDLE = "idle"
@@ -121,11 +115,7 @@ class RobotStatus:
     theta: float = 0.0
     error_message: str = ""
 
-
-# =============================================================================
 # Robot Controller Interface
-# =============================================================================
-
 class RobotControllerInterface(Node):
     """
     ROS2 interface for robot control with HTTP bridge fallback.
@@ -236,7 +226,6 @@ class RobotControllerInterface(Node):
                     'nav2_angle_tolerance': func_config.get('nav2_angle_tolerance', 0.1),
                     'nav2_fallback_to_manual': func_config.get('nav2_fallback_to_manual', True),
                 }
-                # =============================================================================
                 
         except FileNotFoundError:
             logger.info(f"Config file not found at {config_path}, using built-in defaults")
@@ -440,14 +429,6 @@ class RobotControllerInterface(Node):
     async def _send_command(self, twist: Twist, duration: float) -> bool:
         """
         Execute command with SINGLE critical abort check.
-        
-        Args:
-            twist: Velocity command
-            duration: Command duration
-            escape_mode: If True, relax safety checks (orbit escape)
-            
-        Returns:
-            bool: True if command executed successfully
         """
         try:
             logger.info(
@@ -521,12 +502,6 @@ class RobotControllerInterface(Node):
         Check rear hemisphere clearance during backup maneuvers.
         
         Only called when robot is actively backing up (linear_velocity < 0).
-        
-        Args:
-            lidar_data: Current LIDAR scan
-            
-        Returns:
-            float: Minimum rear distance, or None if no valid readings
         """
         if lidar_data is None:
             return None

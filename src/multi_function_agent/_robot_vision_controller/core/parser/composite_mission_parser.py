@@ -11,11 +11,7 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
 # Data Structures
-# =============================================================================
-
 @dataclass
 class StepConfig:
     """Configuration for a single mission step."""
@@ -47,11 +43,7 @@ class CompositeMissionConfig:
     fallback_strategy: Dict[str, str] = field(default_factory=dict)
     global_constraints: Dict[str, Any] = field(default_factory=dict)
 
-
-# =============================================================================
 # Composite Mission Parser
-# =============================================================================
-
 class CompositeMissionParser:
     """
     Parse complex natural language commands into structured composite missions.
@@ -70,157 +62,28 @@ class CompositeMissionParser:
         self._system_prompt = self._load_system_prompt()
     
     def _load_system_prompt(self) -> str:
-        """Load comprehensive system prompt for mission parsing."""
-        return """You are an expert robot mission planner. Parse natural language commands into structured JSON missions.
-
-**IMPORTANT PARSING RULES:**
-
-1. **Ignore RTSP/stream URL setup** - it's handled automatically
-   - "Control robot using rtsp://..." → DON'T create a step for this!
-   - Start with the FIRST ACTUAL ACTION
-
-2. **Directional commands** should use "directional_command" type:
-   - "go right first" → {"type": "directional_command", "parameters": {"direction": "right"}}
-   - "turn left" → {"type": "directional_command", "parameters": {"direction": "left"}}
-
-3. **Duration parsing**:
-   - "explore 120 seconds" → {"type": "explore_area", "parameters": {"duration": 120}}
-   - "patrol 2 times" → {"type": "patrol_laps", "parameters": {"count": 2}}
-
-**MISSION STRUCTURE:**
-A composite mission has multiple STEPS executed sequentially or conditionally.
-
-**STEP TYPES:**
-
-1. **explore_area**: Autonomous exploration with SLAM
-   Parameters: {duration: seconds, coverage: "full"|"partial"}
-   Example: "Explore for 30 seconds"
-
-2. **follow_target**: Track and follow detected object
-   Parameters: {target_class: "person"|"bottle"|etc, min_distance: meters, max_distance: meters}
-   Example: "Follow the person at 2 meters distance"
-
-3. **patrol_laps**: Complete N laps in pattern
-   Parameters: {count: int, shape: "circle"|"square", radius: meters (optional)}
-   Example: "Patrol 5 laps in a circle"
-
-4. **condition_check**: Evaluate condition and branch
-   Parameters: {
-     condition: {
-       type: "object_detected"|"timeout"|"distance_traveled",
-       target_class: string (for object_detected),
-       timeout: seconds
-     },
-     branch_true: step_id (if condition met),
-     branch_false: step_id (if condition not met)
-   }
-   Example: "If you see a bottle, approach it, otherwise continue exploring"
-
-5. **directional_command**: Simple movement directive
-   Parameters: {direction: "left"|"right"|"forward"|"backward", distance: meters OR duration: seconds}
-   Example: "Turn left", "Go forward 3 meters"
-
-**CONDITIONAL LOGIC:**
-- Use condition_check step for branching
-- Conditions: object_detected, timeout, distance_traveled
-- Each condition has branch_true and branch_false
-
-**CONSTRAINTS:**
-- avoid_objects: ["chair", "table"] - objects to avoid during execution
-- max_speed: float - speed limit for mission
-- priority: "safety"|"speed"|"coverage" - optimization goal
-
-**OUTPUT FORMAT (JSON only):**
-{
-  "mission_type": "composite_mission",
-  "description": "Brief summary",
-  "steps": [
-    {
-      "id": "step_1",
-      "type": "explore_area",
-      "parameters": {"duration": 60},
-      "next_step_if_success": "step_2"
-    },
-    {
-      "id": "step_2",
-      "type": "condition_check",
-      "parameters": {
-        "condition": {
-          "type": "object_detected",
-          "target_class": "person",
-          "timeout": 5
-        },
-        "branch_true": "step_3",
-        "branch_false": "step_4"
-      }
-    },
-    {
-      "id": "step_3",
-      "type": "follow_target",
-      "parameters": {"target_class": "person", "min_distance": 2.0},
-      "next_step_if_success": "mission_complete"
-    }
-  ],
-  "fallback_strategy": {
-    "on_stuck": "pause_and_retry",
-    "on_error": "emergency_stop"
-  },
-  "global_constraints": {
-    "avoid_objects": [],
-    "max_speed": 0.6
-  }
-}
-
-**EXAMPLES:**
-
-Input: "Explore for 30 seconds, if you find a person follow them, otherwise patrol 5 laps"
-Output:
-{
-  "mission_type": "composite_mission",
-  "description": "Explore → conditional follow/patrol",
-  "steps": [
-    {"id": "explore", "type": "explore_area", "parameters": {"duration": 30}, "next_step_if_success": "check_person"},
-    {"id": "check_person", "type": "condition_check", "parameters": {"condition": {"type": "object_detected", "target_class": "person", "timeout": 5}, "branch_true": "follow", "branch_false": "patrol"}},
-    {"id": "follow", "type": "follow_target", "parameters": {"target_class": "person", "min_distance": 2.0, "max_distance": 3.0}, "next_step_if_success": "mission_complete"},
-    {"id": "patrol", "type": "patrol_laps", "parameters": {"count": 5, "shape": "circle"}, "next_step_if_success": "mission_complete"}
-  ],
-  "fallback_strategy": {"on_stuck": "pause_and_retry", "on_error": "emergency_stop"}
-}
-
-Input: "Go forward 3 meters, turn left, then explore"
-Output:
-{
-  "mission_type": "composite_mission",
-  "description": "Directional sequence → explore",
-  "steps": [
-    {"id": "forward", "type": "directional_command", "parameters": {"direction": "forward", "distance": 3.0}, "next_step_if_success": "turn"},
-    {"id": "turn", "type": "directional_command", "parameters": {"direction": "left", "duration": 2.0}, "next_step_if_success": "explore"},
-    {"id": "explore", "type": "explore_area", "parameters": {"duration": 60, "coverage": "full"}, "next_step_if_success": "mission_complete"}
-  ],
-  "fallback_strategy": {"on_stuck": "pause_and_retry"}
-}
-
-**IMPORTANT:**
-- Always assign unique step IDs
-- Link steps with next_step_if_success or branch_true/false
-- Include fallback_strategy
-- Use "mission_complete" as final next_step
-- If ambiguous, make reasonable assumptions (can be clarified later)
-"""
+        """Load comprehensive system prompt for composite mission parsing."""
+        from pathlib import Path
+        
+        prompt_file = Path(__file__).parent / "text" / "composite_mission_parser_prompt.txt"
+        
+        try:
+            with open(prompt_file, 'r') as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            logger.warning(f"Prompt file not found: {prompt_file}, using fallback")
+            # Fallback minimal prompt
+            return """You are a robot mission planner. Parse natural language into structured composite missions.
+            
+    Output JSON with: mission_type, description, steps (array of step configs), fallback_strategy.
+            
+    Step types: explore_area, follow_target, patrol_laps, condition_check, directional_command.
+            
+    CRITICAL: Ignore RTSP/stream setup - focus on robot actions only."""
     
     async def parse(self, user_prompt: str, builder) -> CompositeMissionConfig:
         """
         Parse natural language into composite mission config.
-        
-        Args:
-            user_prompt: Natural language command
-            builder: Workflow builder (for LLM config)
-        
-        Returns:
-            CompositeMissionConfig: Structured mission
-        
-        Raises:
-            CompositeParsingError: If parsing fails
         """
         try:
             # Lazy load LLM
@@ -280,12 +143,6 @@ Output:
     def _dict_to_config(self, mission_dict: Dict) -> CompositeMissionConfig:
         """
         Convert parsed JSON dict to CompositeMissionConfig.
-        
-        Args:
-            mission_dict: Parsed JSON from LLM
-        
-        Returns:
-            CompositeMissionConfig: Validated config object
         """
 
         # THÊM: Filter out invalid step types
@@ -336,12 +193,6 @@ Output:
     def _validate_config(self, config: CompositeMissionConfig):
         """
         Validate mission config for correctness.
-        
-        Args:
-            config: Mission config to validate
-        
-        Raises:
-            CompositeParsingError: If validation fails
         """
         if not config.steps:
             raise CompositeParsingError("Mission must have at least one step")
@@ -376,12 +227,6 @@ Output:
     def is_composite_mission(self, user_prompt: str) -> bool:
         """
         Quick heuristic check if prompt is composite mission.
-        
-        Args:
-            user_prompt: User input
-        
-        Returns:
-            bool: True if likely composite mission
         """
         # Indicators of composite missions
         composite_keywords = [
@@ -402,11 +247,7 @@ Output:
             any(seq in prompt_lower for seq in ['then', 'if', 'after that'])
         )
 
-
-# =============================================================================
 # Custom Exceptions
-# =============================================================================
-
 class CompositeParsingError(Exception):
     """Raised when composite mission parsing fails."""
     pass

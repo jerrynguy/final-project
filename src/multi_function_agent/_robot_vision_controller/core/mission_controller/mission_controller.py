@@ -6,7 +6,7 @@ Orchestrates mission lifecycle using strategy pattern.
 import logging
 from typing import Dict
 
-from multi_function_agent._robot_vision_controller.core.goal_parser import (
+from multi_function_agent._robot_vision_controller.core.parser.goal_parser import (
     Mission, 
     parse_mission_from_prompt,
     MissionParsingError,

@@ -20,10 +20,7 @@ from multi_function_agent._robot_vision_controller.perception.detector.frontier_
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
 # Navigation Reasoner
-# =============================================================================
-
 class NavigationReasoner:
     """
     High-level navigation decision maker for autonomous robot control.
@@ -78,12 +75,6 @@ class NavigationReasoner:
         - Zone 3 (FAR): 0.7m+ → Normal forward movement
         - Zone 2 (MEDIUM): 0.3-0.7m → Slow + aggressive steering
         - Zone 1 (CRITICAL): <0.3m → Stop/rotate/backup decision
-        
-        Args:
-            front_clear: Front clearance distance
-            
-        Returns:
-            int: Zone number (1, 2, or 3)
         """
         if front_clear >= 0.7:
             return 3  # FAR - normal speed
@@ -99,13 +90,6 @@ class NavigationReasoner:
     ) -> tuple[str, float]:
         """
         Decide which direction to steer for obstacle avoidance.
-        
-        Args:
-            clearances: Current clearance dict (front/left/right)
-            current_angular: Current angular velocity (for smoothing)
-            
-        Returns:
-            tuple: (direction_name, angular_velocity)
         """
         left = clearances.get('left', 0)
         right = clearances.get('right', 0)
@@ -148,13 +132,6 @@ class NavigationReasoner:
         
         Strategy: Slow down + aggressive steering to avoid obstacle.
         NO BACKUP - just turn and go around.
-        
-        Args:
-            clearances: Current clearances
-            front_clear: Front distance
-            
-        Returns:
-            dict: Navigation command
         """
         direction, angular = self._decide_avoidance_direction(clearances)
         
@@ -191,12 +168,6 @@ class NavigationReasoner:
         Strategy:
         1. Check if sides are clear (>0.25m) → Rotate in place
         2. If all blocked → Gentle backup + rotate
-        
-        Args:
-            clearances: Current clearances
-            
-        Returns:
-            dict: Navigation command
         """
         left = clearances.get('left', 0)
         right = clearances.get('right', 0)
@@ -250,19 +221,12 @@ class NavigationReasoner:
             }
         
     def _execute_directional_command(
-    self,
-    directive: str,
-    vision_analysis: Dict
-) -> Dict:
+        self,
+        directive: str,
+        vision_analysis: Dict
+    ) -> Dict:
         """
         Execute directional commands from composite missions.
-        
-        Args:
-            directive: Format 'directional_move_forward', 'directional_turn_left', etc.
-            vision_analysis: Current vision state
-        
-        Returns:
-            Navigation command dict
         """
         # Extract direction from directive
         # Format: 'directional_move_forward' → 'forward'
@@ -677,21 +641,15 @@ class NavigationReasoner:
             f"[NAV ZONE {zone}] F:{front_clear:.2f} L:{left_clear:.2f} R:{right_clear:.2f}"
         )
         
-        # ========================================================================
         # ZONE 1: CRITICAL (<0.3m) - Rotate or backup
-        # ========================================================================
         if zone == 1:
             return self._create_zone1_command(clearances)
-        
-        # ========================================================================
+
         # ZONE 2: MEDIUM (0.3-0.7m) - Slow down + aggressive steering
-        # ========================================================================
         elif zone == 2:
             return self._create_zone2_command(clearances, front_clear)
-        
-        # ========================================================================
+
         # ZONE 3: FAR (>0.7m) - Normal forward with frontier guidance
-        # ========================================================================
         else:
             # Try to get frontier direction
             best_frontier = None

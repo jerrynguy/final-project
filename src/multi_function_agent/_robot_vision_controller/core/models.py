@@ -18,11 +18,7 @@ from ultralytics import YOLO
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
 # Model Information Data Structure
-# =============================================================================
-
 @dataclass
 class ModelInfo:
     """
@@ -37,10 +33,7 @@ class ModelInfo:
     inference_count: int = 0
     total_inference_time: float = 0.0
 
-# =============================================================================
 # Robot Vision Model Manager
-# =============================================================================
-
 class RobotVisionModelManager:
     """
     Manages loading, caching, and lifecycle of YOLO + AI Recovery models.
@@ -214,11 +207,7 @@ class RobotVisionModelManager:
         except Exception as e:
             logger.warning(f"Memory cleanup failed: {e}")
 
-
-# =============================================================================
 # Global Singleton Instance
-# =============================================================================
-
 _model_manager_instance: Optional[RobotVisionModelManager] = None
 _manager_lock = threading.Lock()
 

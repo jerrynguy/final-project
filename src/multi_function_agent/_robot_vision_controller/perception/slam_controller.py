@@ -86,9 +86,6 @@ class SLAMController:
     def start_slam(self) -> bool:
         """
         Flag SLAM as running (assumes external SLAM process on host).
-        
-        Returns:
-            bool: True (assumes SLAM running externally)
         """
         if self.is_running:
             logger.warning("[SLAM] Already flagged as running")
@@ -112,9 +109,6 @@ class SLAMController:
     def _auto_save_map(self) -> bool:
         """
         Auto-save map using ROS2 bridge.
-        
-        Returns:
-            bool: True if save successful
         """
         try:
             # ✅ GỌI QUA ROS2 BRIDGE
@@ -167,12 +161,6 @@ class SLAMController:
     def wait_for_map_save(self, timeout: float = 10.0) -> bool:
         """
         Wait for final map save and validate files exist.
-        
-        Args:
-            timeout: Max wait time in seconds
-            
-        Returns:
-            bool: True if map exists and valid
         """
         yaml_file = f"{self.map_save_path}.yaml"
         pgm_file = f"{self.map_save_path}.pgm"
@@ -223,9 +211,6 @@ class SLAMController:
     def stop_slam(self) -> bool:
         """
         Stop SLAM tracking and ensure map saved.
-        
-        Returns:
-            bool: True if map successfully saved
         """
         if not self.is_running:
             logger.warning("[SLAM] Not running")
@@ -262,9 +247,6 @@ class SLAMController:
     def get_mapping_stats(self) -> Dict:
         """
         Get current SLAM mapping statistics.
-        
-        Returns:
-            dict: Mapping statistics
         """
         stats = {
             'is_running': self.is_running,

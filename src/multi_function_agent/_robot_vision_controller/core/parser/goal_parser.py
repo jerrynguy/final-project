@@ -10,32 +10,23 @@ from dataclasses import dataclass, asdict
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
 # ADDED: Import composite parser
-from multi_function_agent._robot_vision_controller.core.composite_mission_parser import (
+from multi_function_agent._robot_vision_controller.core.parser.composite_mission_parser import (
     CompositeMissionParser,
     CompositeParsingError
 )
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
 # Custom Exceptions
-# =============================================================================
-
 class MissionParsingError(Exception):
     """Raised when mission cannot be parsed from user prompt."""
     pass
-
 
 class UnsupportedMissionError(Exception):
     """Raised when mission type is not supported."""
     pass
 
-
-# =============================================================================
 # Mission Data Structure
-# =============================================================================
-
 @dataclass
 class Mission:
     """
@@ -57,18 +48,10 @@ class Mission:
         """
         return asdict(self)
 
-
-# =============================================================================
 # Mission Parser
-# =============================================================================
-
 async def parse_mission_from_prompt(user_prompt: str, builder) -> Mission:
     """
     Parse natural language command into structured Mission object using LLM.
-    
-    Raises:
-        MissionParsingError: If LLM fails to parse the prompt
-        UnsupportedMissionError: If mission type is not recognized
     """
     try:
         # Check if composite mission

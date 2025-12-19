@@ -38,11 +38,6 @@ class StuckDetector:
     ):
         """
         Initialize stuck detector.
-        
-        Args:
-            history_window: Number of recent snapshots to track
-            position_variance_threshold: Max position variance (m²) before stuck
-            stuck_time_threshold: Time in same area before declaring stuck
         """
         self.history_window = history_window
         self.position_threshold = position_variance_threshold
@@ -60,15 +55,6 @@ class StuckDetector:
     def update(self, robot_pos: Dict, action: str) -> Dict:
         """
         Update detector with new navigation snapshot.
-        
-        Returns:
-            dict: {
-                'is_stuck': bool,
-                'stuck_type': str,
-                'stuck_duration': float,
-                'confidence': float,
-                'recommended_action': str
-            }
         """
         current_time = time.time()
         
@@ -277,13 +263,6 @@ class StuckDetector:
     ) -> Dict:
         """
         Generate escape command based on stuck type.
-        
-        Args:
-            stuck_type: Type of stuck pattern
-            clearances: Current LiDAR clearances
-            
-        Returns:
-            dict: Navigation command
         """
         if stuck_type == 'position_orbit':
             # Aggressive random turn + forward

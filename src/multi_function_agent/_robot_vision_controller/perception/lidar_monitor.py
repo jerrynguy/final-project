@@ -50,12 +50,10 @@ class LidarSafetyMonitor:
     def _should_abort_for_obstacle(self, angle_deg: float, distance: float) -> bool:
         """
         Smart abort decision based on obstacle angle and movement direction.
-        
-        CHANGED: Stricter threshold - only abort if REALLY dangerous.
         """
         is_forward = self._is_moving_forward()
         
-        # CHANGED: More conservative abort thresholds
+        # More conservative abort thresholds
         if is_forward:
             # Moving forward: only abort if obstacle directly in path
             if abs(angle_deg) <= 45:  # Front arc
@@ -79,10 +77,7 @@ class LidarSafetyMonitor:
         
         return should_abort
     
-    # =========================================================================
-    # Command Generators (MOVED UP to fix "method not found" error)
-    # =========================================================================
-    
+    # Command Generators     
     def _emergency_stop(self) -> Dict:
         """Generate emergency stop command."""
         return {
@@ -133,9 +128,7 @@ class LidarSafetyMonitor:
             time_since_abort = current_time - self.last_abort_time
             in_cooldown = time_since_abort < self.cooldown_duration
             
-            # =====================================================================
             # STATE 1: Check if need to ABORT (smart directional check)
-            # =====================================================================
             if not in_cooldown:
                 # Find closest obstacle that should trigger abort
                 abort_obstacle = None
@@ -150,7 +143,7 @@ class LidarSafetyMonitor:
                 if abort_obstacle:
                     angle, distance = abort_obstacle
                     
-                    # NEW ABORT - start cooldown timer
+                    # ABORT - start cooldown timer
                     self.last_abort_time = current_time
                     self.abort_count += 1
                     
@@ -159,14 +152,14 @@ class LidarSafetyMonitor:
                         f"({distance:.3f}m) → SMART RECOVERY"
                     )
                     
-                    # CHANGED: Smart recovery with clearance analysis
+                    # Smart recovery with clearance analysis
                     clearances = self._analyze_clearances(obstacles_with_angles)
 
-                    # ADDED: Check if this is a dead-end situation
+                    # Check if this is a dead-end situation
                     rear_clear = self._get_rear_clearance(obstacles_with_angles)
                     is_dead_end = self._is_dead_end(clearances, rear_clear)
 
-                    # ADDED: Extend cooldown for dead-end to prevent oscillation
+                    # Extend cooldown for dead-end to prevent oscillation
                     if is_dead_end:
                         self.cooldown_duration = 3.0  # Longer cooldown (was 2.0s)
                         logger.warning("[DEAD-END] Extended cooldown to 3.0s")
@@ -187,9 +180,7 @@ class LidarSafetyMonitor:
                         'state': 'abort'
                     }
             
-            # =====================================================================
             # STATE 2: In COOLDOWN after abort
-            # =====================================================================
             if in_cooldown:
                 min_distance = self._get_min_distance(lidar_data)
                 
@@ -219,10 +210,8 @@ class LidarSafetyMonitor:
                         'min_distance': min_distance,
                         'state': 'cooldown'
                     }
-            
-            # =====================================================================
+
             # STATE 3: NORMAL operation
-            # =====================================================================
             min_distance = self._get_min_distance(lidar_data)
             return {
                 'abort': False,
@@ -240,10 +229,7 @@ class LidarSafetyMonitor:
                 'state': 'error'
             }
     
-    # =========================================================================
     # Helper Methods
-    # =========================================================================
-
     def _is_truly_stuck(
         self, 
         current_pose: Dict,
@@ -251,13 +237,6 @@ class LidarSafetyMonitor:
     ) -> bool:
         """
         Detect if robot is stuck (same position for N iterations).
-        
-        Args:
-            current_pose: Current robot position
-            history_window: Number of iterations to check
-            
-        Returns:
-            bool: True if stuck
         """
         # Track position history
         if not hasattr(self, '_position_history'):
@@ -275,7 +254,7 @@ class LidarSafetyMonitor:
             positions = np.array(self._position_history)
             variance = np.var(positions, axis=0).sum()
             
-            is_stuck = variance < 0.0025  # 5cm variance threshold
+            is_stuck = variance < 0.1  
             
             if is_stuck:
                 logger.error(f"[STUCK DETECTED] Variance: {variance:.6f} - Same position for {history_window} iterations!")
@@ -377,12 +356,6 @@ class LidarSafetyMonitor:
         Get minimum clearance in rear arc for safe backup validation.
         
         Rear arc definition: |angle| > 120° (back hemisphere)
-        
-        Args:
-            obstacles_with_angles: List of (angle_deg, distance) tuples
-            
-        Returns:
-            float: Minimum rear distance (inf if no rear obstacles)
         """
         rear_distances = [
             distance for angle_deg, distance in obstacles_with_angles
@@ -402,13 +375,6 @@ class LidarSafetyMonitor:
         Detect if robot is trapped in dead-end corner.
         
         Dead-end criteria: ALL sides blocked within critical distance.
-        
-        Args:
-            clearances: Front/left/right clearance dict
-            rear_clear: Rear clearance distance
-            
-        Returns:
-            bool: True if robot is in dead-end situation
         """
         DEAD_END_THRESHOLD = 0.18  # Stricter than normal abort (0.20m)
         
@@ -476,9 +442,7 @@ class LidarSafetyMonitor:
             'reason': f'stuck_extraction_{direction}'
         }
     
-    # =========================================================================
     # Command Generators
-    # =========================================================================
     def _smart_recovery_command(
         self, 
         obstacle_angle: float, 
@@ -502,9 +466,7 @@ class LidarSafetyMonitor:
         if robot_pos and self._is_truly_stuck(robot_pos):
             return self._emergency_extraction_command(clearances)
         
-        # =======================================================================
         # STRATEGY 1: ROTATE-ONLY if rear blocked or tight corner
-        # =======================================================================
         if rear_clear < 0.25 or is_tight_corner:
             # Determine rotation direction (toward more open side)
             if left_clear > right_clear + 0.1:
@@ -533,9 +495,7 @@ class LidarSafetyMonitor:
                 'reason': f'rotate_only_{direction}_rear_blocked'
             }
         
-        # =======================================================================
         # STRATEGY 2: SAFE BACKUP with adaptive duration
-        # =======================================================================
         
         # Determine turn direction (toward more open side)
         if left_clear > right_clear + 0.2:
@@ -549,7 +509,7 @@ class LidarSafetyMonitor:
             angular = 0.7 if obstacle_angle > 0 else -0.7
             direction = "away_from_obstacle"
         
-        # CHANGED: Adaptive backup duration based on rear clearance
+        # Adaptive backup duration based on rear clearance
         # Formula: duration = min(0.6s, rear_clearance / 0.35)
         # Examples: 
         #   - rear 0.7m → 0.6s (capped)
@@ -573,10 +533,7 @@ class LidarSafetyMonitor:
             'rear_clearance': rear_clear  # ADDED: For monitoring
         }
     
-    # =========================================================================
-    # Statistics & Debugging
-    # =========================================================================
-    
+    # Statistics & Debugging    
     def get_stats(self) -> Dict:
         """Get safety monitor statistics."""
         return {

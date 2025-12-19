@@ -14,10 +14,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
 # GLOBAL SAFETY THRESHOLDS (Single Source of Truth)
-# =============================================================================
 
 class SafetyThresholds:
     """
@@ -25,58 +22,38 @@ class SafetyThresholds:
     
     ⚠️ CRITICAL: All modules must import from here - no local overrides!
     """
-    
-    # =========================================================================
     # Hardware & Critical Abort Thresholds
-    # =========================================================================
     HARDWARE_LIMIT = 0.12           # Physical collision distance (never breach)
     CRITICAL_ABORT = 0.20           # Emergency backup trigger (360°)
     CRITICAL_ABORT_FRONT = 0.20     # Frontal critical (narrower arc)
     CRITICAL_ABORT_SIDE = 0.15      # Side obstacle warning (wider tolerance)
     RESUME_SAFE = 0.5               # Hysteresis resume threshold
     
-    # =========================================================================
     # Navigation Safety Zones
-    # =========================================================================
     WARNING_ZONE = 0.50             # Start slowing down
     CAUTION_ZONE = 1.00             # Reduce speed significantly  
     SAFE_ZONE = 1.50                # Normal operation speed
     
-    # =========================================================================
     # Directional Arc Definitions (for smart abort logic)
-    # =========================================================================
     FRONT_ARC_HALF_ANGLE = 60       # ±60° = 120° frontal cone
     SIDE_ARC_HALF_ANGLE = 90        # ±90° = 180° side awareness
     
-    # =========================================================================
     # Velocity Limits
-    # =========================================================================
     MAX_SAFE_LINEAR_VEL = 0.6
     MAX_SAFE_ANGULAR_VEL = 2.5
 
-    # =========================================================================
     # Rear Arc Safety Thresholds
-    # =========================================================================
     REAR_ARC_ANGLE = 120            # Degrees - rear arc starts at ±120°
     MIN_SAFE_BACKUP_CLEARANCE = 0.25  # Meters - min rear distance to allow backup
     BACKUP_ABORT_THRESHOLD = 0.20   # Meters - emergency stop during backup
     
-    # =========================================================================
     # Recovery Behavior Thresholds
-    # =========================================================================
     TIGHT_CORNER_THRESHOLD = 0.3    # If both L/R < 0.3m → tight corner (rotate-only)
     
     @classmethod
     def get_critical_distance_for_direction(cls, angle_deg: float, is_moving_forward: bool) -> float:
         """
         Get critical distance based on obstacle angle and movement direction.
-        
-        Args:
-            angle_deg: Obstacle angle in degrees (-180 to 180, 0=front)
-            is_moving_forward: True if robot moving forward
-            
-        Returns:
-            float: Critical distance threshold for this angle
         """
         abs_angle = abs(angle_deg)
         
@@ -93,11 +70,7 @@ class SafetyThresholds:
             else:
                 return cls.CRITICAL_ABORT_SIDE   # 0.15m behind
 
-
-# =============================================================================
 # Safety Result Data Structure
-# =============================================================================
-
 @dataclass
 class SafetyResult:
     """
@@ -107,11 +80,7 @@ class SafetyResult:
     reason: str = ""
     recommended_action: str = "continue"
 
-
-# =============================================================================
 # Safety Validator
-# =============================================================================
-
 class SafetyValidator:
     """
     Validates robot commands against safety constraints.
@@ -120,7 +89,7 @@ class SafetyValidator:
     
     def __init__(self):
         """Initialize safety validator with centralized thresholds."""
-        # CHANGED: Reference centralized thresholds instead of local copies
+        # Reference centralized thresholds instead of local copies
         self.thresholds = SafetyThresholds
         
         # Statistics tracking
@@ -234,10 +203,7 @@ class SafetyValidator:
             'error_fallback': True
         }
 
-
-# =============================================================================
 # Global Safety Validation Functions
-# =============================================================================
 
 def validate_robot_command_safety(twist: Twist, config: Dict[str, Any]) -> bool:
     """

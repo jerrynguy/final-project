@@ -13,10 +13,7 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
 # Navigation Action Enumeration
-# =============================================================================
-
 class NavigationAction(Enum):
     """Available navigation actions for robot control."""
     STOP = "stop"
@@ -30,10 +27,7 @@ class NavigationAction(Enum):
     EMERGENCY_STOP = "emergency_stop"
 
 
-# =============================================================================
 # Navigation Parameters
-# =============================================================================
-
 @dataclass
 class NavigationParameters:
     """Navigation speed and threshold parameters."""
@@ -44,11 +38,7 @@ class NavigationParameters:
     safe_threshold: int = 7
     caution_threshold: int = 4
 
-
-# =============================================================================
 # Enhanced Command Factory
-# =============================================================================
-
 class CommandFactory:
     """
     Factory for creating navigation commands with mission awareness.
@@ -75,10 +65,7 @@ class CommandFactory:
         self.exploration_boost = max(1.0, min(2.0, boost))
         logger.info(f"[COMMAND FACTORY] Exploration boost: {self.exploration_boost}x")
     
-    # =========================================================================
-    # Basic Movement Commands (Already existed)
-    # =========================================================================
-    
+    # Basic Movement Commands    
     def create_forward_command(self, safety_score: int) -> Dict[str, Any]:
         """Create forward movement command with safety-adjusted speed."""
         if safety_score >= self.params.safe_threshold:
@@ -198,9 +185,7 @@ class CommandFactory:
             'reason': f'emergency_stop_{reason}'
         }
     
-    # =========================================================================
-    # NEW: Mission-Specific Commands
-    # =========================================================================
+    # Mission-Specific Commands
     
     # --- TRACKING MISSION COMMANDS ---
     
@@ -387,10 +372,7 @@ class CommandFactory:
                 'reason': f'frontier_{direction}'
             }
     
-    # =========================================================================
-    # NEW: Path-based Navigation
-    # =========================================================================
-    
+    # Path-based Navigation
     def create_command_from_clear_paths(
         self,
         clear_paths: List[str],

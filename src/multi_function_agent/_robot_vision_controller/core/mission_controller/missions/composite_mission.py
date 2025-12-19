@@ -33,11 +33,7 @@ class CompositeState(Enum):
     COMPLETE = "complete"
     ERROR = "error"
 
-
-# =============================================================================
 # Step Executors
-# =============================================================================
-
 class StepExecutor:
     """Base class for step execution."""
     
@@ -187,11 +183,7 @@ class ConditionCheckExecutor(StepExecutor):
         """Directive during condition check."""
         return 'condition_checking'
 
-
-# =============================================================================
 # Composite Mission
-# =============================================================================
-
 class CompositeMission(BaseMission):
     """
     Execute multi-step missions with conditional logic.
@@ -267,12 +259,6 @@ class CompositeMission(BaseMission):
     def _validate_step_requirements(self, step_id: str):
         """
         Validate requirements for a specific step before starting.
-        
-        Args:
-            step_id: ID of step to validate
-            
-        Raises:
-            MissionTransitionError: If requirements not met
         """
         step_config = self.steps[step_id]
         step_type = step_config.type
@@ -307,37 +293,46 @@ class CompositeMission(BaseMission):
             )
     
     def _validate_explore_completion(self):
-        """
-        Validate explore step completed successfully with map saved.
+        """Validate explore map with multi-path search."""
         
-        Raises:
-            MissionTransitionError: If map not found or invalid
-        """
-        # Check map files exist
-        map_path = os.path.expanduser("~/my_map")
-        yaml_file = f"{map_path}.yaml"
-        pgm_file = f"{map_path}.pgm"
+        # Try multiple possible paths (priority order)
+        possible_paths = [
+            "/workspace/mounted_code/maps/my_map",      # Persistent volume (best)
+            "/workspace/persistent_data/maps/my_map",   # Backup location
+            "/root/my_map",                             # Default container path
+            os.path.expanduser("~/my_map"),             # User home fallback
+        ]
         
-        if not (os.path.exists(yaml_file) and os.path.exists(pgm_file)):
-            raise MissionTransitionError(
-                "Explore step completed but map not found. "
-                "SLAM may have failed or not been started. "
-                f"Expected files: {yaml_file}, {pgm_file}"
-            )
+        for map_path in possible_paths:
+            yaml_file = f"{map_path}.yaml"
+            pgm_file = f"{map_path}.pgm"
+            
+            if os.path.exists(yaml_file) and os.path.exists(pgm_file):
+                # Validate file sizes
+                yaml_size = os.path.getsize(yaml_file)
+                pgm_size = os.path.getsize(pgm_file)
+                
+                if yaml_size > 100 and pgm_size > 1000:
+                    logger.info(f"[VALIDATION] ✅ Found valid map: {map_path}")
+                    return  # Success
+                else:
+                    logger.warning(
+                        f"[VALIDATION] Map files too small at {map_path} "
+                        f"(YAML={yaml_size}B, PGM={pgm_size}B), checking next path..."
+                    )
         
-        # Validate file sizes (sanity check)
-        yaml_size = os.path.getsize(yaml_file)
-        pgm_size = os.path.getsize(pgm_file)
+        # None found - raise detailed error
+        logger.error("[VALIDATION] Map search failed. Checked paths:")
+        for path in possible_paths:
+            logger.error(f"  ❌ {path}.yaml")
         
-        if yaml_size < 100 or pgm_size < 1000:
-            raise MissionTransitionError(
-                f"Map files too small (YAML={yaml_size}B, PGM={pgm_size}B). "
-                f"Map may be incomplete or corrupted."
-            )
-        
-        logger.info(
-            f"[VALIDATION] ✅ Explore map validated: "
-            f"YAML={yaml_size}B, PGM={pgm_size}B"
+        raise MissionTransitionError(
+            f"Explore step completed but map not found in any location.\n"
+            f"Searched: {', '.join(possible_paths[:3])}\n\n"
+            f"Fix:\n"
+            f"1. Ensure explore mission completed successfully\n"
+            f"2. Check SLAM was running during explore\n"
+            f"3. Verify map saved to persistent storage"
         )
     
     def _validate_patrol_requirements(self):

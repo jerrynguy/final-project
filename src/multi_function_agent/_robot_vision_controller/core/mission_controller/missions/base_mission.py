@@ -35,9 +35,6 @@ class BaseMission(ABC):
     def __init__(self, config: MissionConfig):
         """
         Initialize mission.
-        
-        Args:
-            config: Mission configuration
         """
         self.config = config
         self.state = self._create_base_state()
@@ -49,9 +46,6 @@ class BaseMission(ABC):
     def _create_base_state(self) -> Dict:
         """
         Create base state shared by all missions.
-        
-        Returns:
-            dict: Base state structure
         """
         return {
             'status': 'active',
@@ -63,9 +57,6 @@ class BaseMission(ABC):
     def _initialize_state(self) -> Dict:
         """
         Initialize mission-specific state.
-        
-        Returns:
-            dict: Mission-specific state fields
         """
         pass
     
@@ -88,9 +79,6 @@ class BaseMission(ABC):
     def _check_completion(self) -> bool:
         """
         Check if mission is completed.
-        
-        Returns:
-            bool: True if mission complete
         """
         pass
     
@@ -98,9 +86,6 @@ class BaseMission(ABC):
     def _get_directive(self) -> str:
         """
         Get current navigation directive.
-        
-        Returns:
-            str: Navigation directive for reasoner
         """
         pass
     

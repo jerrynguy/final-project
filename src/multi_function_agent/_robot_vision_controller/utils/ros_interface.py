@@ -10,11 +10,7 @@ from rclpy.executors import MultiThreadedExecutor
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
 # ROS Manager
-# =============================================================================
-
 class ROSManager:
     """
     Manages ROS2 node spinning in background thread.
@@ -93,14 +89,9 @@ class ROSManager:
         
         logger.debug("ROS spin thread finished")
 
-
-# =============================================================================
 # Global ROS2 Lifecycle Management
-# =============================================================================
-
 _rclpy_initialized = False
 _initialization_lock = threading.Lock()
-
 
 def initialize_ros2():
     """
@@ -118,7 +109,6 @@ def initialize_ros2():
             except Exception as e:
                 logger.error(f"ROS2 initialization failed: {e}")
                 raise
-
 
 def shutdown_ros2():
     """

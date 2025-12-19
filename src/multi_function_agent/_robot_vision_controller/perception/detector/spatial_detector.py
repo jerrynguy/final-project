@@ -24,11 +24,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
-# =============================================================================
 # Object Type Enumeration
-# =============================================================================
-
 class ObjectType(Enum):
     """Types of detected objects in environment."""
     OBSTACLE = "obstacle"
@@ -36,11 +32,7 @@ class ObjectType(Enum):
     PERSON = "person"
     UNKNOWN = "unknown"
 
-
-# =============================================================================
 # Spatial Detector
-# =============================================================================
-
 class SpatialDetector:
     """
     LiDAR-based spatial analysis for obstacle detection and path planning.
@@ -317,7 +309,7 @@ class SpatialDetector:
             # Calculate clearances in each direction
             clearances = self._calculate_clearances_from_lidar(lidar_obstacles)
 
-            # FIXED THRESHOLD: Always use safe_distance (1.0m)
+            # FIXED THRESHOLD: Always use safe_distance
             adaptive_threshold = self.thresholds.SAFE_ZONE  # 1.5m
             logger.info(f"[THRESHOLD] Using fixed threshold {adaptive_threshold:.2f}m")
 
