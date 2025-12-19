@@ -371,6 +371,12 @@ async def run_robot_control_loop(
     last_vision_update = 0
     cached_vision_analysis = None
 
+    navigation_decision = {
+        'action': 'init',
+        'parameters': {'linear_velocity': 0.0, 'angular_velocity': 0.0, 'duration': 0.1},
+        'reason': 'initialization'
+    }
+
     if hasattr(mission_controller._mission_instance, 'stuck_detector'):
         mission_controller._mission_instance.stuck_detector = stuck_detector
 
@@ -425,17 +431,17 @@ async def run_robot_control_loop(
             # STEP 1.5: Stuck Detection
             stuck_result = stuck_detector.update(
                 robot_pos,
-                action=navigation_decision.get('action', 'unknown') if iteration > 0 else 'init'
+                action=navigation_decision.get('action', 'init')
             )
             
-            if stuck_result['is_stuck']:
+            if stuck_result['is_stuck'] and stuck_result['stuck_duration'] >= 15.0:
                 logger.error(
                     f"[STUCK DETECTED] Type: {stuck_result['stuck_type']}, "
                     f"Duration: {stuck_result['stuck_duration']:.1f}s"
                 )
                 
                 # Generate escape command
-                clearances = vision_analysis.get('clearances', {}) if iteration > 0 else {}
+                clearances = cached_vision_analysis.get('clearances', {}) if cached_vision_analysis else {}
                 escape_cmd = stuck_detector.generate_escape_command(
                     stuck_result['stuck_type'],
                     clearances
