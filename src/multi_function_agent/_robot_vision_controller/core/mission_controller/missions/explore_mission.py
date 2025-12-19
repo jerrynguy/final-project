@@ -28,6 +28,13 @@ class ExploreMission(BaseMission):
         # Handle None or inf duration
         if duration is None or duration == float('inf'):
             duration = self.DEFAULT_DURATION
+
+        MAX_EXPLORE_DURATION = 600.0  # 10 minutes absolute max
+        if duration > MAX_EXPLORE_DURATION:
+            logger.warning(
+                f"[EXPLORE] Duration {duration}s capped to {MAX_EXPLORE_DURATION}s"
+            )
+            duration = MAX_EXPLORE_DURATION
         
         return {
             'coverage': self.config.parameters.get('coverage', 'full'),
@@ -80,7 +87,7 @@ class ExploreMission(BaseMission):
                 logger.info(f"[EXPLORE] Covered {area_count} areas")
     
     def _check_completion(self) -> bool:
-        """Check if exploration duration completed."""
+        """Check if exploration duration completed OR stuck too long."""
         elapsed = self.get_elapsed_time()
         duration = self.state['duration']
         
@@ -88,6 +95,20 @@ class ExploreMission(BaseMission):
         if duration is None or duration == float('inf'):
             return False
         
+        # ADDED: Check if stuck detector indicates stuck
+        if hasattr(self, 'stuck_detector'):
+            stuck_stats = self.stuck_detector.get_stats()
+            
+            # If stuck for >30s, force completion
+            if stuck_stats['stuck_duration'] > 30.0:
+                logger.warning(
+                    f"[EXPLORE] Force complete: Stuck {stuck_stats['stuck_duration']:.0f}s "
+                    f"(elapsed: {elapsed:.0f}s/{duration:.0f}s)"
+                )
+                self.state['mapping_complete'] = True
+                return True
+        
+        # Normal completion by time
         if elapsed >= duration:
             self.state['mapping_complete'] = True
             area_count = len(self.state['areas_visited'])

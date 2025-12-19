@@ -4,6 +4,8 @@ Lap-based patrol mission implementation.
 """
 
 import logging
+import os
+from multi_function_agent._robot_vision_controller.core.mission_controller.missions.composite_mission import MissionTransitionError
 import numpy as np
 from typing import Dict, List, Optional
 
@@ -31,6 +33,37 @@ class PatrolMission(BaseMission):
             'lap_waypoints': [],
             'shape': self.config.parameters.get('shape', 'circle')
         }
+    
+    def _validate_patrol_requirements(self):
+        """Validate patrol has map - CHECK MULTIPLE PATHS."""
+        
+        # FIXED: Check multiple possible paths
+        possible_paths = [
+            "/workspace/mounted_code/maps/my_map.yaml",
+            "/workspace/persistent_data/maps/my_map.yaml",
+            "/root/maps/my_map.yaml",
+            "/root/my_map.yaml",
+            os.path.expanduser("~/my_map.yaml"),
+        ]
+        
+        for map_path in possible_paths:
+            if os.path.exists(map_path):
+                logger.info(f"[VALIDATION] ✅ Found map: {map_path}")
+                return  # Success
+        
+        # None found - error
+        logger.error("[VALIDATION] Map search paths:")
+        for path in possible_paths:
+            logger.error(f"  ❌ {path}")
+        
+        raise MissionTransitionError(
+            f"Patrol requires map but not found in any location.\n"
+            f"Searched: {', '.join(possible_paths[:3])}\n\n"
+            f"Fix:\n"
+            f"1. Ensure explore mission completed successfully\n"
+            f"2. Check SLAM was running during explore\n"
+            f"3. Verify map saved to persistent storage"
+        )
     
     def _update_state(
         self,

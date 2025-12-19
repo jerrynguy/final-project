@@ -201,14 +201,11 @@ class CompositeMission(BaseMission):
     """
     
     def __init__(self, config: MissionConfig):
-        """Initialize composite mission."""
         # Extract composite config FIRST
         self.composite_config = config.parameters.get('composite_config')
         if not self.composite_config:
             raise ValueError("Composite mission requires composite_config")
         
-        self._pre_validate_requirements()
-
         # Initialize attributes BEFORE super().__init__()
         self.steps = {step.id: step for step in self.composite_config.steps}
         self.current_step_id = self.composite_config.steps[0].id
@@ -224,6 +221,7 @@ class CompositeMission(BaseMission):
             f"[COMPOSITE] Initialized: {len(self.steps)} steps, "
             f"starting with '{self.current_step_id}'"
         )
+        logger.info("[COMPOSITE] Using lazy validation - steps validated at runtime")
 
     def _pre_validate_requirements(self):
         """
@@ -433,10 +431,13 @@ class CompositeMission(BaseMission):
         
         logger.info(f"[COMPOSITE] Starting step '{self.current_step_id}' ({step_type})")
         
+        # RUNTIME VALIDATION - validate ngay trước khi execute
         try:
+            logger.info(f"[RUNTIME VALIDATION] Checking requirements for '{self.current_step_id}'...")
             self._validate_step_requirements(self.current_step_id)
+            logger.info(f"[RUNTIME VALIDATION] ✅ Step '{self.current_step_id}' ready to execute")
         except MissionTransitionError as e:
-            logger.error(f"[COMPOSITE] Step validation failed: {e}")
+            logger.error(f"[RUNTIME VALIDATION] ❌ Step validation failed: {e}")
             self.composite_state = CompositeState.ERROR
             raise
 
@@ -563,8 +564,9 @@ class CompositeMission(BaseMission):
         try:
             if current_step.type == 'explore_area':
                 # Just finished explore → ensure map saved
-                logger.info("[COMPOSITE] Validating explore completion...")
+                logger.info("[POST-VALIDATION] Checking explore output (map)...")
                 self._validate_explore_completion()
+                logger.info("[POST-VALIDATION] ✅ Explore map validated")
         
         except MissionTransitionError as e:
             logger.error(f"[COMPOSITE] Post-step validation failed: {e}")

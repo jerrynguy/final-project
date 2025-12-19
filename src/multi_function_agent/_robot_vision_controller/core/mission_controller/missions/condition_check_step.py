@@ -138,63 +138,37 @@ class ConditionCheckMission(BaseMission):
         ) -> Optional[bool]:
         """Check if target object detected."""
         target_class = self.condition_params.get('target_class')
-        
+    
         if not target_class:
             logger.error("[CONDITION] object_detected requires target_class")
             return False
         
-        # Priority 1: Use pre-detected objects from main.py
+        # Priority 1: Use pre-detected objects
         if detected_objects:
             detected = any(
                 obj.get('class') == target_class 
                 for obj in detected_objects    
             )
-
-            if detected:
-                logger.info(f"[CONDITION] ✓ Detected target object '{target_class}'")
-                return True
             
-        # Priority 2: On-demand detection if frame + analyzer if available
+            if detected:
+                logger.info(f"[CONDITION] ✓ Detected: {target_class}")
+                return True
+        
+        # Priority 2: On-demand detection
         if frame is not None and vision_analyzer is not None:
             logger.info(f"[CONDITION] Running on-demand YOLO for: {target_class}")
-            analysis_results = vision_analyzer.analyze_frame(frame, full_lidar_scan=full_lidar_scan)
-
+            
+            # FIX: Use correct method name
             detected_now = vision_analyzer.detect_target_objects(
-                frame, target_class,
-                confident_threshold=0.6,
+                frame, 
+                target_class,
+                confidence_threshold=0.6,
                 full_lidar_scan=full_lidar_scan
             )
-
+            
             if detected_now:
-                logger.info(f"[CONDITION] ✓ Detected target object '{target_class}' (on-demand)")
+                logger.info(f"[CONDITION] ✓ Detected '{target_class}' (on-demand)")
                 return True
-        
-        return None  # Keep checking
-    
-    def _check_distance_traveled(self, robot_pos: Optional[Dict]) -> Optional[bool]:
-        """Check if robot traveled target distance."""
-        target_distance = self.condition_params.get('distance', 5.0)
-        
-        if not robot_pos:
-            return None
-        
-        # Track start position
-        if self.start_position is None:
-            self.start_position = (robot_pos['x'], robot_pos['y'])
-            logger.info(f"[CONDITION] Distance check start: {self.start_position}")
-            return None
-        
-        # Calculate distance
-        dx = robot_pos['x'] - self.start_position[0]
-        dy = robot_pos['y'] - self.start_position[1]
-        self.distance_traveled = np.sqrt(dx**2 + dy**2)
-        
-        if self.distance_traveled >= target_distance:
-            logger.info(
-                f"[CONDITION] ✓ Traveled {self.distance_traveled:.2f}m "
-                f"(target: {target_distance}m)"
-            )
-            return True
         
         return None  # Keep checking
     

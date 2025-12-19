@@ -17,29 +17,72 @@ class SLAMController:
     Controls SLAM Toolbox for real-time mapping during exploration missions.
     Auto-saves map every 5 seconds via ros2 map_saver_cli.
     """
-    
-    def __init__(self, map_save_path: str = "~/my_map"):
+    DEFAULT_MAP_PATHS = [
+        "/workspace/mounted_code/maps",  # Persistent across restarts
+        "/workspace/persistent_data/maps",  # Backup location
+        "/root/maps",  # Container fallback
+    ]
+
+    def __init__(self, map_save_path: str = None):
+            """Initialize with persistent path resolution."""
+            
+            # FIXED: Resolve to persistent location
+            if map_save_path is None:
+                map_save_path = self._resolve_persistent_path()
+            else:
+                # Ensure parent dir exists
+                map_dir = os.path.dirname(map_save_path)
+                os.makedirs(map_dir, exist_ok=True)
+            
+            self.map_save_path = map_save_path
+            self.map_dir = os.path.dirname(map_save_path)
+            self.map_name = os.path.basename(map_save_path)
+            
+            # State tracking
+            self.is_running = False
+            self.start_time: Optional[float] = None
+            self.auto_save_interval = 5.0
+            self.last_save_time: Optional[float] = None
+            self.save_count = 0
+            
+            # ADDED: Save method tracking
+            self.last_save_method = None
+            self.save_failures = 0
+            
+            logger.info(
+                f"[SLAM] Initialized - Map dir: {self.map_dir}, "
+                f"Name: {self.map_name}"
+            )
+
+    def _resolve_persistent_path(self) -> str:
         """
-        Initialize SLAM controller.
-        
-        Args:
-            map_save_path: Path for map files (without extension)
+        Resolve map path to persistent storage.
+        Priority: mounted_code > persistent_data > root
         """
-        # Expand path
-        if map_save_path.startswith('~'):
-            map_save_path = os.path.expanduser(map_save_path)
+        for base_dir in self.DEFAULT_MAP_PATHS:
+            try:
+                os.makedirs(base_dir, exist_ok=True)
+                
+                # Test write permission
+                test_file = os.path.join(base_dir, ".write_test")
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+                
+                # Success - use this dir
+                map_path = os.path.join(base_dir, "my_map")
+                logger.info(f"[SLAM] Using persistent path: {map_path}")
+                return map_path
+                
+            except (PermissionError, OSError) as e:
+                logger.warning(f"[SLAM] Cannot use {base_dir}: {e}")
+                continue
         
-        self.map_save_path = map_save_path
-        self.is_running = False
-        self.start_time: Optional[float] = None
-        
-        # Auto-save tracking
-        self.auto_save_interval = 5.0  # seconds
-        self.last_save_time: Optional[float] = None
-        self.save_count = 0
-        
-        logger.info(f"[SLAM] Initialized - Auto-save to: {self.map_save_path}")
-    
+        # Fallback to /tmp (not persistent but works)
+        fallback = "/tmp/my_map"
+        logger.error(f"[SLAM] All persistent paths failed, using: {fallback}")
+        return fallback
+
     def start_slam(self) -> bool:
         """
         Flag SLAM as running (assumes external SLAM process on host).
@@ -66,62 +109,26 @@ class SLAMController:
         
         return True
     
-    def _get_ros_env(self) -> dict:
-        """
-        Get ROS2 environment for subprocess calls.
-        
-        Returns:
-            dict: Environment with ROS2 sourced
-        """
-        env = os.environ.copy()
-        
-        # Source ROS2 setup and extract environment
-        try:
-            result = subprocess.run(
-                ['bash', '-c', 'source /opt/ros/humble/setup.bash && env'],
-                capture_output=True,
-                text=True,
-                timeout=5.0
-            )
-            
-            for line in result.stdout.split('\n'):
-                if '=' in line:
-                    parts = line.split('=', 1)
-                    if len(parts) == 2:
-                        env[parts[0]] = parts[1]
-        except Exception as e:
-            logger.warning(f"[SLAM] ROS2 env setup warning: {e}")
-        
-        # Ensure critical ROS2 variables
-        if 'ROS_DOMAIN_ID' not in env:
-            env['ROS_DOMAIN_ID'] = '0'
-        if 'RMW_IMPLEMENTATION' not in env:
-            env['RMW_IMPLEMENTATION'] = 'rmw_cyclonedds_cpp'
-        
-        return env
-    
     def _auto_save_map(self) -> bool:
         """
-        Auto-save map using nav2_map_server map_saver_cli.
+        Auto-save map using ROS2 bridge.
         
         Returns:
             bool: True if save successful
         """
         try:
-            # Call map_saver_cli via subprocess
-            result = subprocess.run(
-                [
-                    'ros2', 'run', 'nav2_map_server', 'map_saver_cli',
-                    '-f', self.map_save_path,
-                    '--ros-args', '-p', 'save_map_timeout:=5.0'
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10.0,
-                env=self._get_ros_env()
+            # ✅ GỌI QUA ROS2 BRIDGE
+            from multi_function_agent._robot_vision_controller.core.ros2_node.ros2_node import get_ros2_node
+            
+            ros_node = get_ros2_node()
+            
+            logger.info(f"[SLAM] Requesting map save via ROS2 bridge...")
+            success = ros_node.save_slam_map(
+                self.map_save_path, 
+                timeout=10.0
             )
             
-            if result.returncode == 0:
+            if success:
                 self.save_count += 1
                 logger.info(
                     f"[SLAM AUTO-SAVE #{self.save_count}] "
@@ -129,21 +136,9 @@ class SLAMController:
                 )
                 return True
             else:
-                logger.error(
-                    f"[SLAM AUTO-SAVE] Failed (exit {result.returncode}): "
-                    f"{result.stderr.strip()}"
-                )
+                logger.error("[SLAM AUTO-SAVE] Failed via ROS2 bridge")
                 return False
                 
-        except subprocess.TimeoutExpired:
-            logger.error("[SLAM AUTO-SAVE] Timeout after 10s")
-            return False
-        except FileNotFoundError:
-            logger.error(
-                "[SLAM AUTO-SAVE] map_saver_cli not found. "
-                "Install: sudo apt install ros-humble-nav2-map-server"
-            )
-            return False
         except Exception as e:
             logger.error(f"[SLAM AUTO-SAVE] Error: {e}")
             return False

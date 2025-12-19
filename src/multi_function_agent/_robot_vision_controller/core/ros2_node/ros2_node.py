@@ -31,6 +31,9 @@ class ROS2Bridge:
         self._odom_cache = None
         self._nav2_state_cache = 'idle'
         self._slam_map_cache = None
+
+        self._slam_save_result = None
+        self._slam_save_event = threading.Event()
         
         self._daemon_process = None
         self._monitor_thread = None
@@ -70,6 +73,54 @@ class ROS2Bridge:
         """Get Nav2 navigation state."""
         with self._lock:
             return self._nav2_state_cache
+
+    def save_slam_map(self, map_path: str, timeout: float = 10.0) -> bool:
+        """
+        Save SLAM map via daemon (blocking call).
+        
+        Args:
+            map_path: Path to save map (without extension)
+            timeout: Max wait time for response in seconds
+            
+        Returns:
+            bool: True if save successful
+        """
+        try:
+            # Reset result and event
+            with self._lock:
+                self._slam_save_result = None
+                self._slam_save_event.clear()
+            
+            # Send command to daemon
+            cmd = {
+                'type': 'slam_save_map',
+                'map_path': map_path
+            }
+            
+            logger.info(f"[BRIDGE] Requesting SLAM map save: {map_path}")
+            self._send_daemon_command(cmd)
+            
+            # Wait for response (blocking with timeout)
+            response_received = self._slam_save_event.wait(timeout=timeout)
+            
+            if not response_received:
+                logger.error(f"[BRIDGE] ❌ SLAM save timeout after {timeout}s")
+                return False
+            
+            # Check result
+            with self._lock:
+                success = self._slam_save_result
+            
+            if success:
+                logger.info(f"[BRIDGE] ✅ SLAM map saved: {map_path}.yaml")
+            else:
+                logger.error(f"[BRIDGE] ❌ SLAM map save failed")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"[BRIDGE] SLAM save request error: {e}")
+            return False
     
     # =========================================================================
     # Public API - Data
@@ -270,12 +321,7 @@ class ROS2Bridge:
             return None
     
     def _process_daemon_message(self, msg: Dict):
-        """
-        Process message from daemon.
-        
-        Args:
-            msg: Parsed message dict
-        """
+        """Process message from daemon."""
         msg_type = msg.get('type')
         
         with self._lock:
@@ -290,6 +336,16 @@ class ROS2Bridge:
             
             elif msg_type == 'slam_map':
                 self._slam_map_cache = msg['data']
+            
+            elif msg_type == 'slam_save_response':
+                # ✅ HANDLER MỚI cho SLAM save response
+                self._slam_save_result = msg.get('success', False)
+                self._slam_save_event.set()  # Signal waiting thread
+                
+                logger.info(
+                    f"[BRIDGE] SLAM save response received: "
+                    f"success={self._slam_save_result}"
+                )
     
     def _create_lidar_data(self, data: Dict):
         """

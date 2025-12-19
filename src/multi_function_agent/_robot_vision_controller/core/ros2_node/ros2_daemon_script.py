@@ -157,6 +157,61 @@ class ROS2Daemon:
             }
         }
         self._publish_message(data)
+
+    def save_slam_map(self, map_path: str) -> bool:
+        """
+        Save SLAM map using DIRECT binary path (bypass ros2 CLI).
+        
+        Args:
+            map_path: Path to save map (without extension)
+            
+        Returns:
+            bool: True if save successful
+        """
+        import subprocess
+        
+        # Direct path to binary (bypass ros2 CLI issues)
+        map_saver_binary = '/opt/ros/humble/lib/nav2_map_server/map_saver_cli'
+        
+        try:
+            logger.info(f"[DAEMON] Saving SLAM map to: {map_path}")
+            logger.info(f"[DAEMON] Using binary: {map_saver_binary}")
+            
+            # Call binary trực tiếp
+            result = subprocess.run(
+                [
+                    map_saver_binary,
+                    '-f', map_path,
+                    '--ros-args', '-p', 'save_map_timeout:=5.0'
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                env=os.environ.copy()
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"[DAEMON] ✅ Map saved successfully: {map_path}.yaml")
+                return True
+            else:
+                logger.error(
+                    f"[DAEMON] ❌ Map save failed (exit {result.returncode}): "
+                    f"{result.stderr.strip()}"
+                )
+                return False
+                
+        except FileNotFoundError:
+            logger.error(
+                f"[DAEMON] ❌ Binary not found at: {map_saver_binary}\n"
+                f"Please verify nav2-map-server is installed."
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            logger.error("[DAEMON] ❌ Map save timeout after 10s")
+            return False
+        except Exception as e:
+            logger.error(f"[DAEMON] ❌ Map save error: {e}")
+            return False
     
     # =========================================================================
     # Command Processing
@@ -275,6 +330,20 @@ class ROS2Daemon:
         elif cmd_type == 'nav2_cancel':
             success = self.cancel_nav2_goal()
             self._publish_message({'type': 'nav2_response', 'success': success})
+        
+        elif cmd_type == 'slam_save_map':
+            # ✅ HANDLER MỚI cho SLAM map save
+            map_path = cmd.get('map_path', '/root/my_map')
+            success = self.save_slam_map(map_path)
+            
+            # Publish response
+            self._publish_message({
+                'type': 'slam_save_response',
+                'success': success,
+                'map_path': map_path
+            })
+            
+            logger.info(f"[DAEMON] SLAM save response sent: success={success}")
     
     # =========================================================================
     # Main Loop

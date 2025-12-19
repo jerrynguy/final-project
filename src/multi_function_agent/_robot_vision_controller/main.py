@@ -15,6 +15,7 @@ from multi_function_agent._robot_vision_controller.perception.slam_controller im
 from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
 from multi_function_agent._robot_vision_controller.perception.rtsp_stream_handler import RTSPStreamHandler
 from multi_function_agent._robot_vision_controller.perception.robot_vision_analyzer import RobotVisionAnalyzer
+from multi_function_agent._robot_vision_controller.perception.detector.stuck_detector import StuckDetector
 
 from multi_function_agent._robot_vision_controller.navigation.navigation_reasoner import NavigationReasoner
 from multi_function_agent._robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
@@ -117,6 +118,13 @@ async def _robot_vision_controller(
             safety_level=safety_level, 
             max_speed=robot_config["max_speed"]
         )
+
+        stuck_detector = StuckDetector(
+            history_window=20,
+            position_variance_threshold=0.01,
+            stuck_time_threshold=15.0
+        )
+        logger.info("✅ Stuck pattern detector initialized")
 
         exploration_boost = robot_config.get("exploration_speed_boost", 1.0)
         navigation_reasoner.set_exploration_boost(exploration_boost)
@@ -232,6 +240,7 @@ async def _robot_vision_controller(
             navigation_goal,
             safety_validator,
             safety_monitor,
+            stuck_detector,
             mission_controller,
             slam_controller=slam_controller,
             nav2_ready=nav2_ready,
@@ -336,6 +345,7 @@ async def run_robot_control_loop(
     navigation_goal: str,
     safety_validator: SafetyValidator,
     safety_monitor: LidarSafetyMonitor,
+    stuck_detector: StuckDetector,
     mission_controller: MissionController, 
     slam_controller: Optional[SLAMController] = None,
     nav2_ready: bool = False,
@@ -360,6 +370,9 @@ async def run_robot_control_loop(
     iteration = 0
     last_vision_update = 0
     cached_vision_analysis = None
+
+    if hasattr(mission_controller._mission_instance, 'stuck_detector'):
+        mission_controller._mission_instance.stuck_detector = stuck_detector
 
     while max_iterations is None or iteration < max_iterations:
         try:
@@ -407,6 +420,36 @@ async def run_robot_control_loop(
             elif abort_result['command'] is not None:
                 await robot_interface.execute_command(abort_result['command'])
                 await asyncio.sleep(0.1)
+                continue
+
+            # STEP 1.5: Stuck Detection
+            stuck_result = stuck_detector.update(
+                robot_pos,
+                action=navigation_decision.get('action', 'unknown') if iteration > 0 else 'init'
+            )
+            
+            if stuck_result['is_stuck']:
+                logger.error(
+                    f"[STUCK DETECTED] Type: {stuck_result['stuck_type']}, "
+                    f"Duration: {stuck_result['stuck_duration']:.1f}s"
+                )
+                
+                # Generate escape command
+                clearances = vision_analysis.get('clearances', {}) if iteration > 0 else {}
+                escape_cmd = stuck_detector.generate_escape_command(
+                    stuck_result['stuck_type'],
+                    clearances
+                )
+                
+                logger.warning(f"[ESCAPE] Executing: {escape_cmd['reason']}")
+                
+                # Execute escape
+                await robot_interface.execute_command(escape_cmd)
+                results["navigation_decisions"].append(escape_cmd)
+                
+                # Reset detector after escape
+                await asyncio.sleep(0.5)
+                stuck_detector.reset()
                 continue
 
             # STEP 2: Vision Analysis (Cached at 2Hz)
@@ -471,6 +514,7 @@ async def run_robot_control_loop(
                     vision_analyzer=vision_analyzer,
                     full_lidar_scan=full_lidar_scan
                 )
+                
             except MissionTransitionError as e:
                 # Composite mission transition failed
                 logger.error("=" * 60)
