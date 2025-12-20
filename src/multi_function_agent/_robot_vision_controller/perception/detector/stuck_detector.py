@@ -34,7 +34,8 @@ class StuckDetector:
         self,
         history_window: int = 20,
         position_variance_threshold: float = 0.01,  # 10cm
-        stuck_time_threshold: float = 15.0  # seconds
+        stuck_time_threshold: float = 7.0,  # seconds
+        displacement_threshold: float = 0.1
     ):
         """
         Initialize stuck detector.
@@ -42,6 +43,7 @@ class StuckDetector:
         self.history_window = history_window
         self.position_threshold = position_variance_threshold
         self.stuck_time_threshold = stuck_time_threshold
+        self.displacement_threshold = displacement_threshold
         
         # Tracking
         self.history = deque(maxlen=history_window)
@@ -50,7 +52,7 @@ class StuckDetector:
         self.stuck_count: int = 0
         
         # Action pattern tracking
-        self.recent_actions = deque(maxlen=10)
+        self.recent_actions = deque(maxlen=7)
         
     def update(self, robot_pos: Dict, action: str) -> Dict:
         """
@@ -140,31 +142,48 @@ class StuckDetector:
         if len(self.history) < 10:
             return self._no_stuck_result()
         
+        # Check 1: Position Variance
         positions = np.array([s.position for s in self.history])
         variance = np.var(positions, axis=0).sum()
+
+        # Check 2: Total displacement
+        total_displacement = sum(s.distance_traveled for s in self.history)
+        avg_displacement = total_displacement / len(self.history)
         
-        # Check if variance below threshold
-        if variance < self.position_threshold:
-            # Check time duration
-            time_span = self.history[-1].timestamp - self.history[0].timestamp
+        time_span = self.history[-1].timestamp - self.history[0].timestamp
+
+        # DETECTION LOGIC: Stuck if BOTH conditions met
+        is_low_variance = variance < self.position_threshold
+        is_minimal_displacement = total_displacement < self.displacement_threshold
+        is_long_duration = time_span > self.stuck_time_threshold
+
+        if is_low_variance and is_minimal_displacement and is_long_duration:
+            logger.error(
+                f"[POSITION STUCK] Variance: {variance:.6f}m², "
+                f"Displacement: {total_displacement:.3f}m, "
+                f"Duration: {time_span:.1f}s"
+            )
             
-            if time_span > self.stuck_time_threshold:
-                logger.error(
-                    f"[POSITION STUCK] Variance: {variance:.6f} m², "
-                    f"Duration: {time_span:.1f}s"
-                )
-                
-                return {
-                    'is_stuck': True,
-                    'stuck_type': 'position_orbit',
-                    'stuck_duration': time_span,
-                    'confidence': 0.9,
-                    'recommended_action': 'aggressive_escape',
-                    'details': {
-                        'position_variance': variance,
-                        'center': positions.mean(axis=0).tolist()
-                    }
+            return {
+                'is_stuck': True,
+                'stuck_type': 'minimal_displacement',  # ← CHANGED: more descriptive
+                'stuck_duration': time_span,
+                'confidence': 0.95,  # ← Higher confidence với dual check
+                'recommended_action': 'clearance_based_escape',  # ← NEW
+                'details': {
+                    'position_variance': variance,
+                    'total_displacement': total_displacement,
+                    'avg_displacement_per_step': avg_displacement,
+                    'center': positions.mean(axis=0).tolist()
                 }
+            }
+    
+        if is_low_variance or is_minimal_displacement:
+            logger.debug(
+                f"[STUCK WARNING] Variance: {variance:.6f}m², "
+                f"Displacement: {total_displacement:.3f}m "
+                f"(threshold: {self.displacement_threshold}m)"
+            )
         
         return self._no_stuck_result()
     
@@ -264,6 +283,85 @@ class StuckDetector:
         """
         Generate escape command based on stuck type.
         """
+        if stuck_type == 'minimal_displacement':
+            # Find direction with MAX clearance
+            left = clearances.get('left', 0)
+            right = clearances.get('right', 0)
+            front = clearances.get('front', 0)
+            
+            # Also check rear if available
+            rear = clearances.get('rear', 0)
+            
+            # Build clearance map
+            directions = {
+                'left': left,
+                'right': right,
+                'front': front,
+                'rear': rear
+            }
+            
+            # Find best direction (max clearance)
+            best_dir = max(directions, key=directions.get)
+            best_clearance = directions[best_dir]
+            
+            logger.error(
+                f"[CLEARANCE ESCAPE] Stuck at corner - "
+                f"Best direction: {best_dir} ({best_clearance:.2f}m)\n"
+                f"  Clearances: F:{front:.2f} L:{left:.2f} R:{right:.2f} Rear:{rear:.2f}"
+            )
+
+            if best_dir == 'front':
+                # Front is clear - just go forward
+                return {
+                    'action': 'escape_forward',
+                    'parameters': {
+                        'linear_velocity': 0.3,
+                        'angular_velocity': 0.0,
+                        'duration': 2.0
+                    },
+                    'confidence': 0.95,
+                    'reason': 'clearance_escape_forward'
+                }
+            
+            elif best_dir == 'left':
+                # Turn left + move
+                return {
+                    'action': 'escape_turn_left',
+                    'parameters': {
+                        'linear_velocity': 0.2,
+                        'angular_velocity': 0.8,  # Strong turn
+                        'duration': 2.5
+                    },
+                    'confidence': 0.95,
+                    'reason': 'clearance_escape_left'
+                }
+            
+            elif best_dir == 'right':
+                # Turn right + move
+                return {
+                    'action': 'escape_turn_right',
+                    'parameters': {
+                        'linear_velocity': 0.2,
+                        'angular_velocity': -0.8,  # Strong turn
+                        'duration': 2.5
+                    },
+                    'confidence': 0.95,
+                    'reason': 'clearance_escape_right'
+                }
+            
+            else:  # rear is best - need to backup first
+                logger.warning("[CLEARANCE ESCAPE] Rear is best - backup strategy")
+                return {
+                    'action': 'escape_backup',
+                    'parameters': {
+                        'linear_velocity': -0.25,
+                        'angular_velocity': 0.0,
+                        'duration': 1.5
+                    },
+                    'confidence': 0.85,
+                    'reason': 'clearance_escape_backward'
+                }
+
         if stuck_type == 'position_orbit':
             # Aggressive random turn + forward
             import random

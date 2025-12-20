@@ -423,17 +423,27 @@ async def run_robot_control_loop(
             # STEP 2: Stuck Detection
             stuck_result = stuck_detector.update(
                 robot_pos,
-                action=navigation_decision.get('action', 'init')
+                action=navigation_decision.get('action', 'unknown') if iteration > 0 else 'init'
             )
             
-            if stuck_result['is_stuck'] and stuck_result['stuck_duration'] >= 15.0:
+            if stuck_result['is_stuck']:
                 logger.error(
                     f"[STUCK DETECTED] Type: {stuck_result['stuck_type']}, "
                     f"Duration: {stuck_result['stuck_duration']:.1f}s"
                 )
                 
                 # Generate escape command
-                clearances = cached_vision_analysis.get('clearances', {}) if cached_vision_analysis else {}
+                clearances = cached_vision_analysis.get('clearances', {}) 
+
+                # Add rear clearance if available
+                if lidar_snapshot:
+                    from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
+                    temp_monitor = LidarSafetyMonitor()
+                    
+                    obstacles_with_angles = temp_monitor._get_obstacles_with_angles(lidar_snapshot)
+                    rear_clear = temp_monitor._get_rear_clearance(obstacles_with_angles)
+                    clearances['rear'] = rear_clear
+
                 escape_cmd = stuck_detector.generate_escape_command(
                     stuck_result['stuck_type'],
                     clearances
