@@ -34,8 +34,8 @@ class StuckDetector:
         self,
         history_window: int = 20,
         position_variance_threshold: float = 0.01,  # 10cm
-        stuck_time_threshold: float = 7.0,  # seconds
-        displacement_threshold: float = 0.1
+        stuck_time_threshold: float = 10.0,  # seconds
+        displacement_threshold: float = 0.3
     ):
         """
         Initialize stuck detector.
@@ -52,7 +52,7 @@ class StuckDetector:
         self.stuck_count: int = 0
         
         # Action pattern tracking
-        self.recent_actions = deque(maxlen=7)
+        self.recent_actions = deque(maxlen=10)
         
     def update(self, robot_pos: Dict, action: str) -> Dict:
         """
@@ -112,7 +112,7 @@ class StuckDetector:
                 self.stuck_start_time = None
         
         return stuck_result
-    
+
     def _check_stuck_patterns(self) -> Dict:
         """Check all stuck patterns."""
         
@@ -130,6 +130,11 @@ class StuckDetector:
         backup_stuck = self._check_backup_loop()
         if backup_stuck['is_stuck']:
             return backup_stuck
+        
+        # Pattern 4 - Corner trap
+        corner_trap = self._check_corner_trap()
+        if corner_trap['is_stuck']:
+            return corner_trap
         
         return self._no_stuck_result()
     
@@ -184,6 +189,53 @@ class StuckDetector:
                 f"Displacement: {total_displacement:.3f}m "
                 f"(threshold: {self.displacement_threshold}m)"
             )
+        
+        return self._no_stuck_result()
+
+    def _check_corner_trap(self) -> Dict:
+        """
+        Detect corner trap pattern:
+        - Repeated abort commands
+        - Minimal position change
+        - Oscillating recovery directions
+        """
+        if len(self.history) < 8:
+            return self._no_stuck_result()
+        
+        # Count recent abort/recovery actions
+        recent_actions = list(self.recent_actions)[-8:]
+        
+        abort_keywords = ['abort', 'recovery', 'backup', 'critical']
+        abort_count = sum(
+            1 for action in recent_actions 
+            if any(kw in action.lower() for kw in abort_keywords)
+        )
+        
+        # Corner trap signature: >50% abort actions + low displacement
+        if abort_count > len(recent_actions) * 0.5:
+            # Check displacement
+            positions = np.array([s.position for s in list(self.history)[-8:]])
+            total_displacement = sum(s.distance_traveled for s in list(self.history)[-8:])
+            
+            # Corner trap = lots of aborts but minimal progress
+            if total_displacement < self.displacement_threshold:  # Less than 30cm in 8 iterations
+                logger.error(
+                    f"[CORNER TRAP DETECTED] {abort_count}/{len(recent_actions)} aborts, "
+                    f"displacement: {total_displacement:.2f}m"
+                )
+                
+                return {
+                    'is_stuck': True,
+                    'stuck_type': 'corner_trap',
+                    'stuck_duration': 0.0,  # Will be updated by caller
+                    'confidence': 0.95,
+                    'recommended_action': 'corner_escape',
+                    'details': {
+                        'abort_count': abort_count,
+                        'displacement': total_displacement,
+                        'recent_actions': recent_actions[-5:]
+                    }
+                }
         
         return self._no_stuck_result()
     
@@ -362,7 +414,7 @@ class StuckDetector:
                     'reason': 'clearance_escape_backward'
                 }
 
-        if stuck_type == 'position_orbit':
+        elif stuck_type == 'position_orbit':
             # Aggressive random turn + forward
             import random
             angular = random.choice([0.8, -0.8])
@@ -420,6 +472,59 @@ class StuckDetector:
                 'confidence': 0.9,
                 'reason': 'escape_backup_loop'
             }
+        
+        elif stuck_type == 'corner_trap':
+            """
+            Corner trap strategy:
+            1. Backup slowly (0.5-1.0s)
+            2. Rotate toward maximum clearance
+            3. Move forward aggressively
+            """
+            left = clearances.get('left', 0)
+            right = clearances.get('right', 0)
+            rear = clearances.get('rear', 0)
+            
+            # Phase 1: Backup if rear is clear enough
+            if rear > self.displacement_threshold:
+                logger.error(
+                    f"[CORNER ESCAPE Phase 1] Backup 0.8s (rear: {rear:.2f}m)"
+                )
+                return {
+                    'action': 'corner_escape_backup',
+                    'parameters': {
+                        'linear_velocity': -0.20,
+                        'angular_velocity': 0.0,
+                        'duration': 0.8
+                    },
+                    'confidence': 0.90,
+                    'reason': 'corner_trap_backup_first'
+                }
+            
+            # Phase 2: If can't backup, aggressive rotation toward open side
+            else:
+                # Choose side with MAX clearance
+                if left > right + 0.2:
+                    angular = 1.0  # Strong left turn
+                    direction = "left"
+                else:
+                    angular = -1.0  # Strong right turn
+                    direction = "right"
+                
+                logger.error(
+                    f"[CORNER ESCAPE Phase 2] Aggressive rotate {direction} "
+                    f"(L:{left:.2f} R:{right:.2f})"
+                )
+                
+                return {
+                    'action': 'corner_escape_rotate',
+                    'parameters': {
+                        'linear_velocity': 0.15,  # Slight forward during turn
+                        'angular_velocity': angular,
+                        'duration': 1.5  # Longer duration
+                    },
+                    'confidence': 0.85,
+                    'reason': f'corner_trap_aggressive_{direction}'
+                }
         
         else:
             # Generic escape

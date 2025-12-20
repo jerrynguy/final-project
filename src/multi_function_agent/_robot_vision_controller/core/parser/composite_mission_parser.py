@@ -65,7 +65,7 @@ class CompositeMissionParser:
         """Load comprehensive system prompt for composite mission parsing."""
         from pathlib import Path
         
-        prompt_file = Path(__file__).parent / "text" / "composite_mission_parser_prompt.txt"
+        prompt_file = Path(__file__).parent.parent / "text" / "composite_mission_parser_prompt.txt"
         
         try:
             with open(prompt_file, 'r') as f:

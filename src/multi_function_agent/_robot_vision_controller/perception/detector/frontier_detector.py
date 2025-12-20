@@ -39,6 +39,10 @@ class FrontierDetector:
         self.last_detection_time = 0
         self.detection_interval = 3.0  # Detect every 3 seconds
         
+        # Wall safety constraints
+        self.min_safe_distance_from_wall = 2.0  # Keep 2m buffer from walls
+        self.wall_penalty_factor = 0.3  # Heavy penalty for wall-adjacent
+        
         # SLAM map values
         self.FREE = 0
         self.OCCUPIED = 100
@@ -95,17 +99,10 @@ class FrontierDetector:
         except Exception as e:
             logger.error(f"[FRONTIER] Detection failed: {e}")
             return []
-    
+
     def _detect_frontiers_lidar_slam_aware(self, robot_pose: Dict) -> List[Frontier]:
         """
         LiDAR-based frontier detection with SLAM awareness.
-        
-        Key Logic:
-        1. Sample 8 directions
-        2. For each direction with clearance > 1.5m:
-           - Check if path is FREE (no obstacles detected)
-           - Check if NOT hitting a wall (distance < max_range)
-           - Only then it's a valid frontier
         """
         try:
             from multi_function_agent._robot_vision_controller.core.ros2_node.ros2_node import get_ros2_node
@@ -117,6 +114,11 @@ class FrontierDetector:
             
             # Get max LiDAR range
             max_range = lidar_data.range_max if hasattr(lidar_data, 'range_max') else 3.5
+            
+            # ✅ FIX: Convert LaserScan to full_scan Dict using SpatialDetector
+            from multi_function_agent._robot_vision_controller.perception.detector.spatial_detector import SpatialDetector
+            spatial_detector = SpatialDetector()
+            full_scan = spatial_detector.get_full_lidar_scan(lidar_data)
             
             # Sample 8 directions
             directions = [
@@ -145,52 +147,77 @@ class FrontierDetector:
                     np.radians(angle_offset)
                 )
                 
-                # CRITICAL CHECK: Is this a VALID frontier?
+                # LAYER 1: Basic validation
                 is_valid_frontier = self._is_valid_frontier(
                     distance, 
                     max_range, 
                     angle_offset
                 )
                 
-                if is_valid_frontier:
-                    # Calculate frontier center
-                    frontier_x = robot_x + distance * np.cos(np.radians(absolute_angle))
-                    frontier_y = robot_y + distance * np.sin(np.radians(absolute_angle))
-                    
-                    # Score: farther = better, but penalize if too close to max_range (wall)
-                    distance_score = distance / self.max_frontier_distance
-                    
-                    # Penalty if close to sensor max (likely wall)
-                    wall_penalty = 1.0
-                    if distance > max_range * 0.8:
-                        wall_penalty = 0.3  # Heavy penalty for wall-like readings
-                    
-                    # Bonus for front/side (avoid going backward)
-                    direction_bonus = 1.0
-                    if abs(angle_offset) < 90:
-                        direction_bonus = 1.3
-                    elif abs(angle_offset) < 120:
-                        direction_bonus = 1.1
-                    
-                    score = distance_score * wall_penalty * direction_bonus
-                    
-                    frontier = Frontier(
-                        center=(frontier_x, frontier_y),
-                        size=int(distance * 10),
-                        distance=distance,
-                        angle=angle_offset,
-                        score=score,
-                        is_valid=True
+                if not is_valid_frontier:
+                    continue
+                
+                # ✅ LAYER 2: Wall-adjacent check (NOW full_scan is defined!)
+                is_wall_adjacent = False
+                wall_ratio = 0.0
+                
+                if full_scan:  # Check if conversion successful
+                    is_wall_adjacent, wall_ratio = self._has_nearby_wall(
+                        angle_offset,
+                        distance,
+                        full_scan  # ← NOW WORKS!
                     )
                     
-                    frontiers.append(frontier)
-                    
-                    logger.debug(
-                        f"[FRONTIER] {name}: dist={distance:.2f}m, "
-                        f"score={score:.2f}, valid=True"
-                    )
+                    # Hard filter for wall-adjacent + too close
+                    if is_wall_adjacent and distance < self.min_safe_distance_from_wall:
+                        logger.debug(
+                            f"[FRONTIER REJECT] {name} at {distance:.1f}m "
+                            f"rejected (wall-adjacent + too close)"
+                        )
+                        continue
+                
+                # ✅ LAYER 3: Calculate score with wall penalties
+                frontier_x = robot_x + distance * np.cos(np.radians(absolute_angle))
+                frontier_y = robot_y + distance * np.sin(np.radians(absolute_angle))
+                
+                distance_score = distance / self.max_frontier_distance
+                
+                wall_max_penalty = 1.0
+                if distance > max_range * 0.8:
+                    wall_max_penalty = 0.3
+                
+                wall_adjacent_penalty = 1.0
+                if is_wall_adjacent:
+                    wall_adjacent_penalty = 1.0 - (wall_ratio * 0.6)
+                
+                direction_bonus = 1.0
+                if abs(angle_offset) < 90:
+                    direction_bonus = 1.3
+                elif abs(angle_offset) < 120:
+                    direction_bonus = 1.1
+                
+                score = (distance_score * 
+                        wall_max_penalty * 
+                        wall_adjacent_penalty * 
+                        direction_bonus)
+                
+                frontier = Frontier(
+                    center=(frontier_x, frontier_y),
+                    size=int(distance * 10),
+                    distance=distance,
+                    angle=angle_offset,
+                    score=score,
+                    is_valid=True
+                )
+                
+                frontiers.append(frontier)
+                
+                logger.debug(
+                    f"[FRONTIER] {name}: dist={distance:.2f}m, "
+                    f"score={score:.2f}, wall_adj={is_wall_adjacent}"
+                )
             
-            # Sort by score (higher = better)
+            # Sort by score
             frontiers.sort(key=lambda f: f.score, reverse=True)
             
             return frontiers
@@ -198,7 +225,7 @@ class FrontierDetector:
         except Exception as e:
             logger.error(f"[FRONTIER] LiDAR detection failed: {e}")
             return []
-    
+
     def _is_valid_frontier(
         self, 
         distance: float, 
@@ -235,6 +262,69 @@ class FrontierDetector:
             return False
         
         return True
+
+    def _has_nearby_wall(
+        self, 
+        angle_deg: float, 
+        distance: float,
+        full_scan: Dict[int, float]
+    ) -> tuple[bool, float]:
+        """
+        Detect if frontier has walls nearby (wall-hugging detection).
+        
+        Strategy:
+        1. Check ±30° arc around frontier direction
+        2. Count readings < 2.5m (wall threshold)
+        3. If >40% readings show walls → wall-adjacent
+        
+        Args:
+            angle_deg: Frontier direction in degrees
+            distance: Frontier distance
+            full_scan: Complete 360° LiDAR scan
+        
+        Returns:
+            (is_wall_adjacent: bool, wall_ratio: float)
+        """
+        if not full_scan:
+            return False, 0.0
+        
+        WALL_THRESHOLD = 2.5  # Distance considered "close wall"
+        CHECK_ARC = 30  # Check ±30° around frontier
+        WALL_RATIO_THRESHOLD = 0.4  # 40% = wall-adjacent
+        
+        wall_readings = 0
+        total_checks = 0
+        
+        # Sample every 5° in ±30° arc
+        for offset in range(-CHECK_ARC, CHECK_ARC + 1, 5):
+            check_angle = int(angle_deg + offset)
+            
+            # Normalize to [-180, 180]
+            while check_angle > 180:
+                check_angle -= 360
+            while check_angle < -180:
+                check_angle += 360
+            
+            if check_angle in full_scan:
+                nearby_distance = full_scan[check_angle]
+                total_checks += 1
+                
+                if nearby_distance < WALL_THRESHOLD:
+                    wall_readings += 1
+        
+        if total_checks == 0:
+            return False, 0.0
+        
+        wall_ratio = wall_readings / total_checks
+        is_wall_adjacent = wall_ratio > WALL_RATIO_THRESHOLD
+        
+        if is_wall_adjacent:
+            logger.debug(
+                f"[WALL DETECT] Frontier at {angle_deg:.0f}° ({distance:.1f}m) "
+                f"is wall-adjacent ({wall_ratio:.1%} readings < {WALL_THRESHOLD}m)"
+            )
+        
+        return is_wall_adjacent, wall_ratio
     
     def _get_lidar_distance_at_angle(self, lidar_data, angle_rad: float) -> float:
         """Get LiDAR distance at specific angle."""

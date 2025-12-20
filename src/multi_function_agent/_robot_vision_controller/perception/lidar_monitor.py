@@ -31,7 +31,7 @@ class LidarSafetyMonitor:
         
         # Hysteresis state tracking
         self.last_abort_time = 0.0
-        self.cooldown_duration = 2.0
+        self.cooldown_duration = 3.0
         
         # Track current movement for smart abort
         self.last_linear_velocity = 0.0
@@ -337,6 +337,56 @@ class LidarSafetyMonitor:
         logger.debug(f"[REAR CHECK] Min rear clearance: {min_rear:.3f}m")
         return min_rear
 
+    def _get_rear_clearance_by_direction(
+        self, 
+        obstacles_with_angles: List[Tuple[float, float]]
+    ) -> Dict[str, float]:
+        """
+        Get rear clearance in 3 zones for intelligent backup.
+        
+        Zones:
+        - rear_left: 120° to 180° (back-left quadrant)
+        - rear_center: 150° to 180° AND -180° to -150° (straight back)
+        - rear_right: -180° to -120° (back-right quadrant)
+        
+        Returns:
+            Dict with min distance per zone. inf = no obstacle.
+        """
+        rear_zones = {
+            'rear_left': [],
+            'rear_center': [],
+            'rear_right': []
+        }
+        
+        for angle_deg, distance in obstacles_with_angles:
+            # Rear left: 120° to 150°
+            if 120 < angle_deg <= 150:
+                rear_zones['rear_left'].append(distance)
+            
+            # Rear center: straight back (150° to 180° and -180° to -150°)
+            elif 150 < angle_deg <= 180 or -180 <= angle_deg < -150:
+                rear_zones['rear_center'].append(distance)
+            
+            # Rear right: -150° to -120°
+            elif -150 <= angle_deg < -120:
+                rear_zones['rear_right'].append(distance)
+        
+        # Calculate min distance per zone
+        clearances = {}
+        for zone, distances in rear_zones.items():
+            if distances:
+                clearances[zone] = min(distances)
+            else:
+                clearances[zone] = float('inf')  # No obstacle detected
+        
+        logger.debug(
+            f"[REAR ZONES] Left:{clearances['rear_left']:.2f}m, "
+            f"Center:{clearances['rear_center']:.2f}m, "
+            f"Right:{clearances['rear_right']:.2f}m"
+        )
+        
+        return clearances
+
     def _is_dead_end(self, clearances: Dict, rear_clear: float) -> bool:
         """
         Detect if robot is trapped in dead-end corner.
@@ -415,43 +465,105 @@ class LidarSafetyMonitor:
                 'reason': f'rotate_only_{direction}_rear_blocked'
             }
         
-        # STRATEGY 2: SAFE BACKUP with adaptive duration
-        
-        # Determine turn direction (toward more open side)
-        if left_clear > right_clear + 0.2:
-            angular = 0.6  # Moderate left turn while backing
-            direction = "left"
-        elif right_clear > left_clear + 0.2:
-            angular = -0.6  # Moderate right turn while backing
-            direction = "right"
+        # STRATEGY 2: INTELLIGENT BACKUP with rear+front analysis
         else:
-            # Equal clearance: turn away from obstacle angle
-            angular = 0.7 if obstacle_angle > 0 else -0.7
-            direction = "away_from_obstacle"
-        
-        # Adaptive backup duration based on rear clearance
-        # Formula: duration = min(0.6s, rear_clearance / 0.35)
-        # Examples: 
-        #   - rear 0.7m → 0.6s (capped)
-        #   - rear 0.4m → 0.57s
-        #   - rear 0.3m → 0.43s
-        safe_duration = min(0.6, rear_clear / 0.35)
-        
-        logger.info(
-            f"[SAFE BACKUP] Rear: {rear_clear:.2f}m, L/R: {left_clear:.2f}/{right_clear:.2f}m "
-            f"→ Backup {safe_duration:.2f}s + turn {direction}"
-        )
-        
-        return {
-            'action': 'safe_backup_recovery',
-            'parameters': {
-                'linear_velocity': -0.20,  # CHANGED: Slower backup (was -0.25)
-                'angular_velocity': angular,
-                'duration': safe_duration  # CHANGED: Adaptive (was fixed 1.2s)
-            },
-            'reason': f'safe_backup_{direction}',
-            'rear_clearance': rear_clear  # ADDED: For monitoring
-        }
+            # Get directional rear clearances
+            rear_zones = self._get_rear_clearance_by_direction(obstacles_with_angles)
+            
+            rear_left = rear_zones.get('rear_left', 0)
+            rear_center = rear_zones.get('rear_center', 0)
+            rear_right = rear_zones.get('rear_right', 0)
+            
+            # Determine best backup direction using weighted scoring
+            backup_scores = {
+                'center': rear_center * 1.2,  # Prefer straight backup (1.2x weight)
+                'left': rear_left * 1.0,
+                'right': rear_right * 1.0
+            }
+            
+            # Find best direction
+            best_direction = max(backup_scores.items(), key=lambda x: x[1])
+            backup_direction = best_direction[0]
+            backup_clearance = rear_zones.get(f'rear_{backup_direction}', 0)
+            
+            # Safety check: minimum clearance required
+            MIN_BACKUP_CLEARANCE = 0.25
+            if backup_clearance < MIN_BACKUP_CLEARANCE:
+                # Can't backup safely in any direction → force rotate-only
+                logger.warning(
+                    f"[BACKUP ABORT] All rear zones blocked "
+                    f"(best: {backup_clearance:.2f}m < {MIN_BACKUP_CLEARANCE}m)"
+                )
+                
+                # Fall back to rotate-only strategy
+                if left_clear > right_clear + 0.1:
+                    angular = 0.8
+                    direction = "left"
+                else:
+                    angular = -0.8
+                    direction = "right"
+                
+                return {
+                    'action': 'forced_rotate_recovery',
+                    'parameters': {
+                        'linear_velocity': 0.0,
+                        'angular_velocity': angular,
+                        'duration': 1.0
+                    },
+                    'reason': f'backup_blocked_rotate_{direction}'
+                }
+            
+            # Determine angular velocity based on backup direction
+            if backup_direction == 'center':
+                # Straight backup - add slight bias away from front obstacle
+                if obstacle_angle > 10:  # Obstacle on left
+                    angular = -0.2  # Slight right turn during backup
+                    bias = "right"
+                elif obstacle_angle < -10:  # Obstacle on right
+                    angular = 0.2  # Slight left turn during backup
+                    bias = "left"
+                else:
+                    angular = 0.0  # Pure straight backup
+                    bias = "straight"
+                
+                logger.info(
+                    f"[SMART BACKUP] Center backup with {bias} bias "
+                    f"(clearance: {backup_clearance:.2f}m)"
+                )
+            
+            elif backup_direction == 'left':
+                angular = 0.5  # Moderate left turn while backing
+                logger.info(
+                    f"[SMART BACKUP] Left backup "
+                    f"(rear-left: {backup_clearance:.2f}m)"
+                )
+            
+            else:  # right
+                angular = -0.5  # Moderate right turn while backing
+                logger.info(
+                    f"[SMART BACKUP] Right backup "
+                    f"(rear-right: {backup_clearance:.2f}m)"
+                )
+            
+            # Adaptive duration based on available clearance
+            # Formula: duration = min(0.6s, clearance / 0.35)
+            # Examples: 
+            #   - 0.7m clearance → 0.6s (capped)
+            #   - 0.4m clearance → 0.57s
+            #   - 0.3m clearance → 0.43s
+            safe_duration = min(0.6, backup_clearance / 0.35)
+            
+            return {
+                'action': 'smart_backup_recovery',
+                'parameters': {
+                    'linear_velocity': -0.20,
+                    'angular_velocity': angular,
+                    'duration': safe_duration
+                },
+                'reason': f'smart_backup_{backup_direction}',
+                'rear_clearance': backup_clearance,
+                'backup_direction': backup_direction
+            }
     
     # Statistics & Debugging    
     def get_stats(self) -> Dict:

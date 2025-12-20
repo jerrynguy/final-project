@@ -425,7 +425,7 @@ async def run_robot_control_loop(
                 robot_pos,
                 action=navigation_decision.get('action', 'unknown') if iteration > 0 else 'init'
             )
-            
+
             if stuck_result['is_stuck']:
                 logger.error(
                     f"[STUCK DETECTED] Type: {stuck_result['stuck_type']}, "
@@ -442,8 +442,13 @@ async def run_robot_control_loop(
                     
                     obstacles_with_angles = temp_monitor._get_obstacles_with_angles(lidar_snapshot)
                     rear_clear = temp_monitor._get_rear_clearance(obstacles_with_angles)
-                    clearances['rear'] = rear_clear
-
+                    
+                    # Add null check
+                    if rear_clear is not None:
+                        clearances['rear'] = rear_clear
+                    else:
+                        clearances['rear'] = 0.5  # Safe default
+                
                 escape_cmd = stuck_detector.generate_escape_command(
                     stuck_result['stuck_type'],
                     clearances
@@ -455,9 +460,10 @@ async def run_robot_control_loop(
                 await robot_interface.execute_command(escape_cmd)
                 results["navigation_decisions"].append(escape_cmd)
                 
-                # Reset detector after escape
-                await asyncio.sleep(0.5)
-                stuck_detector.reset()
+                # Adaptive delay based on command duration
+                escape_duration = escape_cmd['parameters'].get('duration', 1.0)
+                await asyncio.sleep(escape_duration * 0.3)  # 30% buffer
+                
                 continue
 
             # STEP 3: Vision Analysis (Cached at 2Hz)

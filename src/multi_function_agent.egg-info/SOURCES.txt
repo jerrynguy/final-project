@@ -11,8 +11,6 @@ src/multi_function_agent.egg-info/requires.txt
 src/multi_function_agent.egg-info/top_level.txt
 src/multi_function_agent/_robot_vision_controller/main.py
 src/multi_function_agent/_robot_vision_controller/test_integration.py
-src/multi_function_agent/_robot_vision_controller/core/composite_mission_parser.py
-src/multi_function_agent/_robot_vision_controller/core/goal_parser.py
 src/multi_function_agent/_robot_vision_controller/core/models.py
 src/multi_function_agent/_robot_vision_controller/core/query_extractor.py
 src/multi_function_agent/_robot_vision_controller/core/mission_controller/mission_controller.py
@@ -24,6 +22,8 @@ src/multi_function_agent/_robot_vision_controller/core/mission_controller/missio
 src/multi_function_agent/_robot_vision_controller/core/mission_controller/missions/explore_mission.py
 src/multi_function_agent/_robot_vision_controller/core/mission_controller/missions/follow_mission.py
 src/multi_function_agent/_robot_vision_controller/core/mission_controller/missions/patrol_mission.py
+src/multi_function_agent/_robot_vision_controller/core/parser/composite_mission_parser.py
+src/multi_function_agent/_robot_vision_controller/core/parser/goal_parser.py
 src/multi_function_agent/_robot_vision_controller/core/ros2_node/ros2_daemon_script.py
 src/multi_function_agent/_robot_vision_controller/core/ros2_node/ros2_node.py
 src/multi_function_agent/_robot_vision_controller/navigation/nav2_interface.py

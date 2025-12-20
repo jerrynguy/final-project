@@ -468,6 +468,9 @@ class RobotControllerInterface(Node):
                                 backup_cmd['parameters']['angular_velocity']
                             )
                             await asyncio.sleep(0.05)
+
+                        await asyncio.sleep(0.5)
+                        
                         return False
                     
                     # Extra rear monitoring if backing up
