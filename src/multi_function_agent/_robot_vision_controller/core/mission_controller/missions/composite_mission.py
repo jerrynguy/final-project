@@ -191,7 +191,6 @@ class CompositeMission(BaseMission):
     State Machine:
     INIT → EXECUTING → CHECKING_CONDITION → TRANSITIONING → EXECUTING → ... → COMPLETE
     """
-    
     def __init__(self, config: MissionConfig):
         # Extract composite config FIRST
         self.composite_config = config.parameters.get('composite_config')
@@ -206,6 +205,9 @@ class CompositeMission(BaseMission):
         self.execution_context = {}
         self.composite_state = CompositeState.INIT
         
+        # Track which steps have been pre-validated
+        self._pre_validated_steps = set()
+
         # NOW call parent constructor
         super().__init__(config)
         
@@ -213,48 +215,50 @@ class CompositeMission(BaseMission):
             f"[COMPOSITE] Initialized: {len(self.steps)} steps, "
             f"starting with '{self.current_step_id}'"
         )
-        logger.info("[COMPOSITE] Using lazy validation - steps validated at runtime")
 
-    def _pre_validate_requirements(self):
+        self._pre_validate_explore_requirements()
+        
+        logger.info("[COMPOSITE] Pre-validation complete - ready to execute")
+
+    def _pre_validate_explore_requirements(self):
         """
-        Pre-validate requirements for ALL steps before mission starts.
-        Ensures SLAM/map setup is done BEFORE control loop begins.
+        Pre-validate ALL explore steps BEFORE mission starts.
+        Ensures SLAM confirmation happens BEFORE any robot movement.
         """
         from multi_function_agent._robot_vision_controller.core.mission_controller.mission_validator.mission_validator import (
             MissionValidator,
             MissionRequirementsError
         )
         
-        for step in self.composite_config.steps:
-            step_type = step.type
+        # Find all explore steps
+        explore_steps = [
+            step for step in self.composite_config.steps 
+            if step.type == 'explore_area'
+        ]
+        
+        if not explore_steps:
+            return  # No explore steps, skip validation
+        
+        logger.info(
+            f"[PRE-VALIDATION] Found {len(explore_steps)} explore step(s), "
+            f"checking SLAM availability..."
+        )
+        
+        try:
+            # Validate SLAM ONCE for all explore steps
+            MissionValidator.validate_explore_mission()
+
+            # Mark ALL explore steps as pre-validated
+            for step in explore_steps:
+                self._pre_validated_steps.add(step.id)
+                logger.debug(f"[PRE-VALIDATION] Step '{step.id}' marked as pre-validated")
+                
+            logger.info("[PRE-VALIDATION] ✅ SLAM confirmed for explore steps")
             
-            # Check explore steps (need SLAM confirmation)
-            if step_type == 'explore_area':
-                logger.info(f"[PRE-VALIDATION] Step '{step.id}' requires SLAM")
-                try:
-                    MissionValidator.validate_explore_mission()
-                    logger.info(f"[PRE-VALIDATION] ✅ SLAM confirmed for '{step.id}'")
-                except MissionRequirementsError as e:
-                    raise MissionTransitionError(
-                        f"Composite mission cannot start: Step '{step.id}' requires SLAM. {e}"
-                    )
-            
-            # Check patrol steps (need map)
-            elif step_type == 'patrol_laps':
-                logger.info(f"[PRE-VALIDATION] Step '{step.id}' requires map")
-                try:
-                    self._validate_patrol_requirements()
-                    logger.info(f"[PRE-VALIDATION] ✅ Map found for '{step.id}'")
-                except MissionRequirementsError as e:
-                    # Map might not exist yet (will be created by explore step)
-                    # Check if explore step comes before patrol
-                    explore_steps = [s for s in self.composite_config.steps if s.type == 'explore_area']
-                    if not explore_steps:
-                        raise MissionTransitionError(
-                            f"Step '{step.id}' requires map but no explore step found. {e}"
-                        )
-                    else:
-                        logger.warning(f"[PRE-VALIDATION] Map not found yet - will be created by explore step")
+        except MissionRequirementsError as e:
+            raise MissionTransitionError(
+                f"Composite mission cannot start: Explore steps require SLAM. {e}"
+            )
 
     def _validate_step_requirements(self, step_id: str):
         """
@@ -392,6 +396,20 @@ class CompositeMission(BaseMission):
             self.composite_state = CompositeState.EXECUTING
         
         elif self.composite_state == CompositeState.EXECUTING:
+            # Check composite-level stuck BEFORE executing sub-mission
+            if self._check_composite_stuck():
+                logger.error("[COMPOSITE] Stuck detected at composite level - force completing step")
+                self._force_complete_current_step()
+                self.state['completed_steps'].append(self.current_step_id)
+                
+                next_step_id = self._determine_next_step()
+                if next_step_id == 'mission_complete':
+                    self.composite_state = CompositeState.COMPLETE
+                    logger.info("[COMPOSITE] Mission complete ✓ (forced by stuck)")
+                else:
+                    self.composite_state = CompositeState.TRANSITIONING
+                return self.state
+            
             # Execute current step
             step_result = self._execute_current_step(
                 detected_objects, robot_pos, frame_info,
@@ -429,6 +447,37 @@ class CompositeMission(BaseMission):
         
         return self.state
     
+    def _check_composite_stuck(self) -> bool:
+        """
+        Composite-level stuck check (Option C - Hybrid approach).
+        
+        Checks if robot stuck for too long and current step not progressing.
+        """
+        if not hasattr(self, 'stuck_detector') or self.stuck_detector is None:
+            return False
+        
+        stuck_stats = self.stuck_detector.get_stats()
+        
+        # If stuck for >45s at composite level, force complete
+        if stuck_stats['stuck_duration'] > 45.0:
+            logger.error(
+                f"[COMPOSITE STUCK] Robot stuck {stuck_stats['stuck_duration']:.0f}s "
+                f"- forcing step completion"
+            )
+            return True
+        
+        return False
+
+    def _force_complete_current_step(self):
+        """Force complete current step due to stuck condition."""
+        if self.sub_mission:
+            self.sub_mission.state['completed'] = True
+            self.sub_mission.state['progress'] = 1.0
+            logger.warning(
+                f"[COMPOSITE] Force completed step '{self.current_step_id}' "
+                f"(type: {self.steps[self.current_step_id].type})"
+            )
+
     def _start_current_step(self):
         """Start execution of current step."""
         step_config = self.steps[self.current_step_id]
@@ -437,14 +486,20 @@ class CompositeMission(BaseMission):
         logger.info(f"[COMPOSITE] Starting step '{self.current_step_id}' ({step_type})")
         
         # RUNTIME VALIDATION - validate ngay trước khi execute
-        try:
-            logger.info(f"[RUNTIME VALIDATION] Checking requirements for '{self.current_step_id}'...")
-            self._validate_step_requirements(self.current_step_id)
-            logger.info(f"[RUNTIME VALIDATION] ✅ Step '{self.current_step_id}' ready to execute")
-        except MissionTransitionError as e:
-            logger.error(f"[RUNTIME VALIDATION] ❌ Step validation failed: {e}")
-            self.composite_state = CompositeState.ERROR
-            raise
+        if self.current_step_id in self._pre_validated_steps:
+            logger.info(
+                f"[RUNTIME VALIDATION] Step '{self.current_step_id}' already pre-validated, "
+                f"skipping redundant check"
+            )
+        else:
+            try:
+                logger.info(f"[RUNTIME VALIDATION] Checking requirements for '{self.current_step_id}'...")
+                self._validate_step_requirements(self.current_step_id)
+                logger.info(f"[RUNTIME VALIDATION] ✅ Step '{self.current_step_id}' ready to execute")
+            except MissionTransitionError as e:
+                logger.error(f"[RUNTIME VALIDATION] ❌ Step validation failed: {e}")
+                self.composite_state = CompositeState.ERROR
+                raise
 
         # MODIFIED: Import and use dedicated step classes
         if step_type in ['explore_area', 'follow_target', 'patrol_laps']:
@@ -480,7 +535,7 @@ class CompositeMission(BaseMission):
             self.composite_state = CompositeState.ERROR
 
     def _start_sub_mission(self, step_config):
-        """Start a sub-mission (explore/follow/patrol)."""
+        """Start a sub-mission (explore/follow/patrol) with stuck detector."""
         step_type = step_config.type
         
         # Create mission config
@@ -499,8 +554,16 @@ class CompositeMission(BaseMission):
         elif step_type == 'patrol_laps':
             self.sub_mission = PatrolMission(mission_config)
         
+        # Propagate stuck detector to sub-mission (Hybrid approach)
+        if hasattr(self, 'stuck_detector') and self.stuck_detector is not None:
+            self.sub_mission.stuck_detector = self.stuck_detector
+            logger.debug(
+                f"[COMPOSITE] Stuck detector propagated to sub-mission "
+                f"'{step_config.id}' ({step_type})"
+            )
+        
         logger.info(f"[COMPOSITE] Sub-mission started: {step_type}")
-    
+        
     def _execute_current_step(
         self,
         detected_objects,
@@ -514,10 +577,26 @@ class CompositeMission(BaseMission):
         
         # Execute sub-mission
         if self.sub_mission:
-            return self.sub_mission.process_frame(
+            result = self.sub_mission.process_frame(
                 detected_objects, robot_pos, frame_info,
                 frame, vision_analyzer, full_lidar_scan
             )
+            
+            # Composite-level timeout safety net
+            if hasattr(self.sub_mission, 'get_elapsed_time'):
+                elapsed = self.sub_mission.get_elapsed_time()
+                MAX_STEP_DURATION = 120.0  # 2 minutes max per step
+                
+                if elapsed > MAX_STEP_DURATION:
+                    logger.error(
+                        f"[COMPOSITE BAILOUT] Step '{self.current_step_id}' "
+                        f"exceeded max duration ({elapsed:.0f}s > {MAX_STEP_DURATION}s)"
+                    )
+                    # Force step completion
+                    if hasattr(self.sub_mission, 'state'):
+                        self.sub_mission.state['completed'] = True
+            
+            return result
         
         # Execute custom executor
         elif self.current_executor:

@@ -20,6 +20,9 @@ class ExploreMission(BaseMission):
     GRID_SIZE = 1.0  # Meters - grid cell size for coverage tracking
     DEFAULT_DURATION = 60.0  # Seconds
     COVERAGE_LOG_INTERVAL = 10  # Log every N new areas
+
+    # Stuck bailout threshold
+    STUCK_BAILOUT_THRESHOLD = 8.0  # Seconds - force complete if stuck too long
     
     def _initialize_state(self) -> Dict:
         """Initialize explore-specific state."""
@@ -87,7 +90,16 @@ class ExploreMission(BaseMission):
                 logger.info(f"[EXPLORE] Covered {area_count} areas")
     
     def _check_completion(self) -> bool:
-        """Check if exploration duration completed OR stuck too long."""
+        """
+        Multi-condition completion check (Q3: Option B).
+        
+        Completion criteria:
+        1. Duration elapsed (MANDATORY - must always be checked)
+        2. OR (Stuck >30s AND duration >50% complete)
+        3. OR (Safety aborts >10 times AND duration >50% complete)
+        
+        Duration is ALWAYS required to complete.
+        """
         elapsed = self.get_elapsed_time()
         duration = self.state['duration']
         
@@ -95,27 +107,61 @@ class ExploreMission(BaseMission):
         if duration is None or duration == float('inf'):
             return False
         
-        # ADDED: Check if stuck detector indicates stuck
-        if hasattr(self, 'stuck_detector'):
-            stuck_stats = self.stuck_detector.get_stats()
-            
-            # If stuck for >30s, force completion
-            if stuck_stats['stuck_duration'] > 30.0:
-                logger.warning(
-                    f"[EXPLORE] Force complete: Stuck {stuck_stats['stuck_duration']:.0f}s "
-                    f"(elapsed: {elapsed:.0f}s/{duration:.0f}s)"
-                )
-                self.state['mapping_complete'] = True
-                return True
+        # Calculate progress percentage
+        progress_pct = (elapsed / duration) * 100 if duration > 0 else 0
         
-        # Normal completion by time
+        # Duration timeout (MANDATORY - always wins)
         if elapsed >= duration:
             self.state['mapping_complete'] = True
             area_count = len(self.state['areas_visited'])
             logger.info(
-                f"[EXPLORE] Completed: {area_count} areas in {elapsed:.0f}s"
+                f"[EXPLORE] ✅ Completed: Duration timeout "
+                f"({elapsed:.0f}s >= {duration:.0f}s), covered {area_count} areas"
             )
             return True
+        
+        # Stuck detection (only if >50% duration passed)
+        if progress_pct >= 50.0:
+            if hasattr(self, 'stuck_detector') and self.stuck_detector:
+                stuck_stats = self.stuck_detector.get_stats()
+                
+                if stuck_stats['stuck_duration'] > self.STUCK_BAILOUT_THRESHOLD:
+                    logger.error(
+                        f"[EXPLORE BAILOUT] Stuck {stuck_stats['stuck_duration']:.0f}s "
+                        f"(threshold: {self.STUCK_BAILOUT_THRESHOLD}s) "
+                        f"→ EMERGENCY COMPLETE"
+                    )
+                    logger.error(
+                        f"[EXPLORE BAILOUT] Total elapsed: {elapsed:.0f}s/{duration:.0f}s, "
+                        f"areas covered: {len(self.state['areas_visited'])}"
+                    )
+                    self.state['mapping_complete'] = True
+                    return True
+                
+            # Additional Nav2 rescue attempt flag
+            # If Nav2 rescue was attempted but failed, force complete sooner
+            if hasattr(self, '_nav2_rescue_failed') and self._nav2_rescue_failed:
+                if elapsed > duration * 0.3:  # If >30% of time passed and Nav2 failed
+                    logger.error(
+                        f"[EXPLORE BAILOUT] Nav2 rescue failed and "
+                        f"{elapsed:.0f}s/{duration:.0f}s elapsed → FORCE COMPLETE"
+                    )
+                    self.state['mapping_complete'] = True
+                    return True
+        
+            # Safety abort spam (only if >50% duration passed)
+            # Track abort count from stuck detector or separate counter
+            if hasattr(self, 'stuck_detector') and self.stuck_detector:
+                stuck_stats = self.stuck_detector.get_stats()
+                abort_count = stuck_stats.get('total_stuck_count', 0)
+                
+                if abort_count > 10:
+                    logger.warning(
+                        f"[EXPLORE] ⚠️ Force complete: Too many aborts ({abort_count}) "
+                        f"(progress: {progress_pct:.0f}%, elapsed: {elapsed:.0f}s/{duration:.0f}s)"
+                    )
+                    self.state['mapping_complete'] = True
+                    return True
         
         return False
     

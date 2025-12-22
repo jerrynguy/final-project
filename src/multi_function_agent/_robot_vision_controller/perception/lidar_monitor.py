@@ -1,11 +1,12 @@
 """
-LiDAR Safety Monitor Module (Smart Directional + Smart Recovery)
-Critical abort with intelligent recovery toward open space.
+LiDAR Safety Monitor Module (Refactored - No Hysteresis)
+Critical abort với state machine đơn giản và intelligent recovery.
 """
 
 import time
 import logging
 import numpy as np
+from enum import Enum
 from typing import Dict, Optional, List, Tuple
 
 from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
@@ -13,32 +14,49 @@ from multi_function_agent._robot_vision_controller.utils.safety_checks import Sa
 logger = logging.getLogger(__name__)
 
 
+# ===== NEW: State Machine =====
+class SafetyState(Enum):
+    """Safety monitor states."""
+    NORMAL = "normal"           # Hoạt động bình thường
+    ABORT = "abort"             # Đang execute recovery
+    ESCAPE_WAIT = "escape_wait" # Chờ robot thoát (3s pause)
+
+
 class LidarSafetyMonitor:
     """
-    Smart directional safety monitor with intelligent recovery.
+    Safety monitor với state machine đơn giản.
+    
+    Flow:
+    NORMAL → (obstacle < 0.20m) → ABORT → ESCAPE_WAIT (3s) → NORMAL
     
     Features:
-    - Direction-aware obstacle detection
-    - Smart recovery that turns toward open space
-    - Hysteresis to prevent oscillation
+    - Loại bỏ hysteresis phức tạp
+    - Stuck detection: 3 aborts tại cùng vị trí → force escape
+    - Smart recovery: validate direction trước khi rotate/backup
     """
     
     def __init__(self):
-        """Initialize monitor with centralized thresholds."""
+        """Initialize monitor."""
         self.thresholds = SafetyThresholds
         
+        # State machine
+        self.state = SafetyState.NORMAL
         self.abort_count = 0
         
-        # Hysteresis state tracking
-        self.last_abort_time = 0.0
-        self.cooldown_duration = 3.0
+        # Escape tracking
+        self.escape_start_time = 0.0
+        self.escape_duration = 3.0  # 3 seconds escape window
         
-        # Track current movement for smart abort
+        # Stuck detection
+        self.last_abort_position = None
+        self.consecutive_aborts_at_same_spot = 0
+        
+        # Movement tracking (for directional abort)
         self.last_linear_velocity = 0.0
         self.last_angular_velocity = 0.0
     
     def update_movement_state(self, linear_vel: float, angular_vel: float):
-        """Update current movement direction for smart abort logic."""
+        """Track current movement for directional abort logic."""
         self.last_linear_velocity = linear_vel
         self.last_angular_velocity = angular_vel
     
@@ -46,22 +64,25 @@ class LidarSafetyMonitor:
         """Check if robot is primarily moving forward (not turning)."""
         return (abs(self.last_linear_velocity) > 0.1 and 
                 abs(self.last_angular_velocity) < 0.3)
-
+    
     def _should_abort_for_obstacle(self, angle_deg: float, distance: float) -> bool:
         """
         Smart abort decision based on obstacle angle and movement direction.
+        
+        Rules:
+        - Forward motion: chỉ abort nếu obstacle ở front arc (±45°)
+        - Turning/stopped: abort nếu obstacle ở wider arc (±90°)
         """
         is_forward = self._is_moving_forward()
         
-        # More conservative abort thresholds
         if is_forward:
-            # Moving forward: only abort if obstacle directly in path
-            if abs(angle_deg) <= 45:  # Front arc
-                critical_threshold = 0.22  # INCREASED from 0.20m
-            else:  # Side/rear
-                critical_threshold = 0.15  # Keep strict for sides
+            # Moving forward: strict front check
+            if abs(angle_deg) <= 45:
+                critical_threshold = 0.22  # Front arc
+            else:
+                critical_threshold = 0.15  # Side (more lenient)
         else:
-            # Turning/stopped: check wider arc
+            # Turning: check wider arc
             if abs(angle_deg) <= 90:
                 critical_threshold = 0.20
             else:
@@ -72,43 +93,21 @@ class LidarSafetyMonitor:
         if should_abort:
             logger.debug(
                 f"[ABORT CHECK] angle={angle_deg:.1f}°, dist={distance:.3f}m, "
-                f"threshold={critical_threshold:.3f}m, forward={is_forward} → ABORT"
+                f"threshold={critical_threshold:.3f}m → ABORT"
             )
         
         return should_abort
     
-    # Command Generators     
-    def _emergency_stop(self) -> Dict:
-        """Generate emergency stop command."""
-        return {
-            'action': 'stop',
-            'parameters': {
-                'linear_velocity': 0.0,
-                'angular_velocity': 0.0,
-                'duration': 0.1
-            },
-            'reason': 'emergency_stop'
-        }
-    
-    def _pause_command(self) -> Dict:
-        """Generate brief pause command during cooldown."""
-        return {
-            'action': 'stop',
-            'parameters': {
-                'linear_velocity': 0.0,
-                'angular_velocity': 0.0,
-                'duration': 0.3
-            },
-            'reason': 'cooldown_pause'
-        }
-    
     def check_critical_abort(
-            self,
-            lidar_data,
-            robot_pos: Optional[Dict] = None
-        ) -> Dict:
+        self,
+        lidar_data,
+        robot_pos: Optional[Dict] = None
+    ) -> Dict:
         """
-        Check for critical distance with smart directional logic and recovery.
+        Main safety check với state machine.
+        
+        Returns:
+            Dict with keys: abort, command, min_distance, state
         """
         if lidar_data is None:
             logger.error("[CRITICAL] No LIDAR data - ABORT")
@@ -120,99 +119,85 @@ class LidarSafetyMonitor:
             }
         
         try:
-            # Get obstacles with angles
-            obstacles_with_angles = self._get_obstacles_with_angles(lidar_data)
             current_time = time.time()
-            
-            # Calculate time since last abort
-            time_since_abort = current_time - self.last_abort_time
-            in_cooldown = time_since_abort < self.cooldown_duration
-            
-            # STATE 1: Check if need to ABORT (smart directional check)
-            if not in_cooldown:
-                # Find closest obstacle that should trigger abort
-                abort_obstacle = None
-                min_abort_distance = float('inf')
-                
-                for angle_deg, distance in obstacles_with_angles:
-                    if self._should_abort_for_obstacle(angle_deg, distance):
-                        if distance < min_abort_distance:
-                            min_abort_distance = distance
-                            abort_obstacle = (angle_deg, distance)
-                
-                if abort_obstacle:
-                    angle, distance = abort_obstacle
-                    
-                    # ABORT - start cooldown timer
-                    self.last_abort_time = current_time
-                    self.abort_count += 1
-                    
-                    logger.error(
-                        f"[ABORT #{self.abort_count}] Obstacle at {angle:.1f}° "
-                        f"({distance:.3f}m) → SMART RECOVERY"
-                    )
-                    
-                    # Smart recovery with clearance analysis
-                    clearances = self._analyze_clearances(obstacles_with_angles)
-
-                    # Check if this is a dead-end situation
-                    rear_clear = self._get_rear_clearance(obstacles_with_angles)
-                    is_dead_end = self._is_dead_end(clearances, rear_clear)
-
-                    # Extend cooldown for dead-end to prevent oscillation
-                    if is_dead_end:
-                        self.cooldown_duration = 3.0  # Longer cooldown (was 2.0s)
-                        logger.warning("[DEAD-END] Extended cooldown to 3.0s")
-                    else:
-                        self.cooldown_duration = 2.0  # Normal cooldown
-                    
-                    return {
-                        'abort': True,
-                        'command': self._smart_recovery_command(
-                            angle, 
-                            clearances, 
-                            obstacles_with_angles,
-                            robot_pos
-                        ),
-                        'min_distance': distance,
-                        'obstacle_angle': angle,
-                        'clearances': clearances,
-                        'state': 'abort'
-                    }
-            
-            # STATE 2: In COOLDOWN after abort
-            if in_cooldown:
-                min_distance = self._get_min_distance(lidar_data)
-                
-                if min_distance > self.thresholds.RESUME_SAFE:
-                    logger.info(
-                        f"[RESUME] Clearance: {min_distance:.3f}m "
-                        f"(after {time_since_abort:.1f}s cooldown) → NORMAL"
-                    )
-                    self.last_abort_time = 0.0
-                    
-                    return {
-                        'abort': False,
-                        'command': None,
-                        'min_distance': min_distance,
-                        'state': 'normal'
-                    }
-                
-                else:
-                    logger.debug(
-                        f"[COOLDOWN] {time_since_abort:.1f}s elapsed - "
-                        f"Distance: {min_distance:.3f}m (need > {self.thresholds.RESUME_SAFE}m)"
-                    )
-                    
-                    return {
-                        'abort': False,
-                        'command': self._pause_command(),
-                        'min_distance': min_distance,
-                        'state': 'cooldown'
-                    }
-
-            # STATE 3: NORMAL operation
+            obstacles = self._get_obstacles_with_angles(lidar_data)
             min_distance = self._get_min_distance(lidar_data)
+            
+            # ===== STATE MACHINE =====
+            
+            # STATE 1: ESCAPE_WAIT (đang thoát, không xử lý abort mới)
+            if self.state == SafetyState.ESCAPE_WAIT:
+                elapsed = current_time - self.escape_start_time
+                
+                # Check if escaped successfully
+                if min_distance > self.thresholds.RESUME_SAFE:  # 0.5m
+                    logger.info(
+                        f"[ESCAPE SUCCESS] Distance: {min_distance:.2f}m "
+                        f"after {elapsed:.1f}s → NORMAL"
+                    )
+                    self.state = SafetyState.NORMAL
+                    return {'abort': False, 'command': None, 'state': 'normal'}
+                
+                # Check if escape timeout (stuck)
+                if elapsed > self.escape_duration:
+                    logger.error(
+                        f"[ESCAPE TIMEOUT] Still at {min_distance:.2f}m "
+                        f"after {elapsed:.1f}s → FORCE ESCAPE"
+                    )
+                    return self._force_escape_response(obstacles, robot_pos)
+                
+                # Still escaping - pause commands
+                logger.debug(
+                    f"[ESCAPING] {elapsed:.1f}s/{self.escape_duration:.1f}s, "
+                    f"dist={min_distance:.2f}m"
+                )
+                return {
+                    'abort': False,
+                    'command': self._pause_command(),
+                    'min_distance': min_distance,
+                    'state': 'escape_wait'
+                }
+            
+            # STATE 2: NORMAL - Check for new abort
+            abort_obstacle = self._find_abort_obstacle(obstacles)
+            
+            if abort_obstacle:
+                angle, distance = abort_obstacle
+                
+                # Check if stuck at same position
+                if self._is_stuck_at_position(robot_pos):
+                    logger.error("[STUCK DETECTED] Same position abort → FORCE ESCAPE")
+                    return self._force_escape_response(obstacles, robot_pos)
+                
+                # Normal abort → execute recovery
+                self.abort_count += 1
+                self.state = SafetyState.ABORT
+                
+                logger.error(
+                    f"[ABORT #{self.abort_count}] Obstacle at {angle:.1f}° "
+                    f"({distance:.3f}m) → RECOVERY"
+                )
+                
+                # Generate recovery command
+                clearances = self._analyze_clearances(obstacles)
+                recovery_cmd = self._smart_recovery_command(
+                    angle, clearances, obstacles, robot_pos
+                )
+                
+                # Transition to ESCAPE_WAIT
+                self.state = SafetyState.ESCAPE_WAIT
+                self.escape_start_time = current_time
+                
+                return {
+                    'abort': True,
+                    'command': recovery_cmd,
+                    'min_distance': distance,
+                    'obstacle_angle': angle,
+                    'clearances': clearances,
+                    'state': 'abort'
+                }
+            
+            # No abort - continue normal
             return {
                 'abort': False,
                 'command': None,
@@ -229,7 +214,178 @@ class LidarSafetyMonitor:
                 'state': 'error'
             }
     
-    # Helper Methods    
+    def _find_abort_obstacle(
+        self, 
+        obstacles: List[Tuple[float, float]]
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Tìm obstacle cần abort (gần nhất và thỏa điều kiện).
+        
+        Returns:
+            (angle, distance) hoặc None
+        """
+        abort_obstacle = None
+        min_abort_distance = float('inf')
+        
+        for angle_deg, distance in obstacles:
+            if self._should_abort_for_obstacle(angle_deg, distance):
+                if distance < min_abort_distance:
+                    min_abort_distance = distance
+                    abort_obstacle = (angle_deg, distance)
+        
+        return abort_obstacle
+    
+    def _is_stuck_at_position(self, robot_pos: Optional[Dict]) -> bool:
+        """
+        Detect if aborting at same position repeatedly.
+        
+        Logic: Nếu 3 lần abort gần nhau (< 0.1m) → STUCK
+        """
+        if robot_pos is None:
+            return False
+        
+        current_pos = (robot_pos['x'], robot_pos['y'])
+        
+        # First abort at this mission
+        if self.last_abort_position is None:
+            self.last_abort_position = current_pos
+            self.consecutive_aborts_at_same_spot = 1
+            return False
+        
+        # Calculate distance from last abort
+        dx = current_pos[0] - self.last_abort_position[0]
+        dy = current_pos[1] - self.last_abort_position[1]
+        distance = np.sqrt(dx**2 + dy**2)
+        
+        # Same spot (< 10cm)
+        if distance < 0.1:
+            self.consecutive_aborts_at_same_spot += 1
+            logger.warning(
+                f"[STUCK CHECK] Abort #{self.consecutive_aborts_at_same_spot} "
+                f"at same spot (distance={distance:.3f}m)"
+            )
+            
+            # 3 aborts at same spot = STUCK
+            if self.consecutive_aborts_at_same_spot >= 3:
+                return True
+        else:
+            # Moved away - reset counter
+            self.last_abort_position = current_pos
+            self.consecutive_aborts_at_same_spot = 1
+        
+        return False
+    
+    def _force_escape_response(
+        self,
+        obstacles: List[Tuple[float, float]],
+        robot_pos: Optional[Dict]
+    ) -> Dict:
+        """
+        Force escape khi bị stuck (3 aborts tại cùng vị trí).
+        
+        Strategy: Tìm hướng OPEN nhất và đi thẳng 1.5m
+        """
+        clearances = self._analyze_clearances(obstacles)
+        rear_clear = self._get_rear_clearance(obstacles)
+        
+        # Build clearance map (4 directions)
+        directions = {
+            'front': clearances.get('front', 0),
+            'left': clearances.get('left', 0),
+            'right': clearances.get('right', 0),
+            'rear': rear_clear
+        }
+        
+        # Find MAX clearance direction
+        best_dir = max(directions, key=directions.get)
+        best_clearance = directions[best_dir]
+        
+        logger.error(
+            f"[FORCE ESCAPE] Best direction: {best_dir} ({best_clearance:.2f}m)\n"
+            f"  Clearances: F:{directions['front']:.2f} "
+            f"L:{directions['left']:.2f} R:{directions['right']:.2f} "
+            f"Rear:{rear_clear:.2f}"
+        )
+        
+        # Reset stuck counter
+        self.consecutive_aborts_at_same_spot = 0
+        self.last_abort_position = None
+        
+        # Transition back to ESCAPE_WAIT với extended duration
+        self.state = SafetyState.ESCAPE_WAIT
+        self.escape_start_time = time.time()
+        self.escape_duration = 6.0  # Extended for force escape
+        
+        # Generate escape command (1.5m straight in best direction)
+        if best_dir == 'front':
+            return {
+                'abort': True,
+                'command': {
+                    'action': 'force_escape_forward',
+                    'parameters': {
+                        'linear_velocity': 0.25,
+                        'angular_velocity': 0.0,
+                        'duration': 6.0  # 1.5m at 0.25m/s
+                    },
+                    'reason': 'force_escape_front',
+                    'force_execute': True
+                },
+                'min_distance': best_clearance,
+                'state': 'force_escape'
+            }
+        
+        elif best_dir == 'rear':
+            return {
+                'abort': True,
+                'command': {
+                    'action': 'force_escape_backward',
+                    'parameters': {
+                        'linear_velocity': -0.25,
+                        'angular_velocity': 0.0,
+                        'duration': 6.0
+                    },
+                    'reason': 'force_escape_rear',
+                    'force_execute': True
+                },
+                'min_distance': best_clearance,
+                'state': 'force_escape'
+            }
+        
+        elif best_dir == 'left':
+            # Rotate left 90° + forward
+            return {
+                'abort': True,
+                'command': {
+                    'action': 'force_escape_left',
+                    'parameters': {
+                        'linear_velocity': 0.20,
+                        'angular_velocity': 0.6,
+                        'duration': 4.0
+                    },
+                    'reason': 'force_escape_left',
+                    'force_execute': True
+                },
+                'min_distance': best_clearance,
+                'state': 'force_escape'
+            }
+        
+        else:  # right
+            return {
+                'abort': True,
+                'command': {
+                    'action': 'force_escape_right',
+                    'parameters': {
+                        'linear_velocity': 0.20,
+                        'angular_velocity': -0.6,
+                        'duration': 4.0
+                    },
+                    'reason': 'force_escape_right',
+                    'force_execute': True
+                },
+                'min_distance': best_clearance,
+                'state': 'force_escape'
+            }
+
     def _get_obstacles_with_angles(self, lidar_data) -> List[Tuple[float, float]]:
         """Extract obstacles with their angles from LIDAR scan."""
         try:
@@ -255,18 +411,16 @@ class LidarSafetyMonitor:
                 obstacles.append((angle_deg, distance))
             
             obstacles.sort(key=lambda x: x[1])
-            
             return obstacles
             
         except Exception as e:
-            logger.error(f"Failed to extract obstacles with angles: {e}")
+            logger.error(f"Failed to extract obstacles: {e}")
             return []
     
     def _get_min_distance(self, lidar_data) -> float:
-        """Extract minimum distance from LIDAR scan (360° coverage)."""
+        """Extract minimum distance from LIDAR scan."""
         try:
             ranges = lidar_data.ranges
-            
             valid_ranges = [
                 r for r in ranges 
                 if not (np.isnan(r) or np.isinf(r))
@@ -286,7 +440,7 @@ class LidarSafetyMonitor:
         """Public interface for minimum distance."""
         return self._get_min_distance(lidar_data)
     
-    def _analyze_clearances(self, obstacles_with_angles: List[Tuple[float, float]]) -> Dict:
+    def _analyze_clearances(self, obstacles: List[Tuple[float, float]]) -> Dict:
         """
         Analyze clearance distances in each direction.
         """
@@ -296,7 +450,7 @@ class LidarSafetyMonitor:
             'right': float('inf')
         }
         
-        for angle_deg, distance in obstacles_with_angles:
+        for angle_deg, distance in obstacles:
             abs_angle = abs(angle_deg)
             
             # Front: ±45°
@@ -311,95 +465,43 @@ class LidarSafetyMonitor:
             elif -135 <= angle_deg < -45:
                 clearances['right'] = min(clearances['right'], distance)
         
-        # Cap at max sensor range for readability
+        # Cap at max sensor range
         for key in clearances:
             if clearances[key] == float('inf'):
                 clearances[key] = 3.5  # Max LiDAR range
         
         return clearances
-
-    def _get_rear_clearance(self, obstacles_with_angles: List[Tuple[float, float]]) -> float:
+    
+    def _get_rear_clearance(self, obstacles: List[Tuple[float, float]]) -> float:
         """
         Get minimum clearance in rear arc for safe backup validation.
         
-        Rear arc definition: |angle| > 120° (back hemisphere)
+        Rear arc: |angle| > 120°
         """
         rear_distances = [
-            distance for angle_deg, distance in obstacles_with_angles
-            if abs(angle_deg) > 120  # Rear hemisphere: 120-180° and -120 to -180°
+            distance for angle_deg, distance in obstacles
+            if abs(angle_deg) > 120
         ]
         
         if not rear_distances:
             return float('inf')
         
         min_rear = min(rear_distances)
-        
         logger.debug(f"[REAR CHECK] Min rear clearance: {min_rear:.3f}m")
         return min_rear
-
-    def _get_rear_clearance_by_direction(
-        self, 
-        obstacles_with_angles: List[Tuple[float, float]]
-    ) -> Dict[str, float]:
-        """
-        Get rear clearance in 3 zones for intelligent backup.
-        
-        Zones:
-        - rear_left: 120° to 180° (back-left quadrant)
-        - rear_center: 150° to 180° AND -180° to -150° (straight back)
-        - rear_right: -180° to -120° (back-right quadrant)
-        
-        Returns:
-            Dict with min distance per zone. inf = no obstacle.
-        """
-        rear_zones = {
-            'rear_left': [],
-            'rear_center': [],
-            'rear_right': []
-        }
-        
-        for angle_deg, distance in obstacles_with_angles:
-            # Rear left: 120° to 150°
-            if 120 < angle_deg <= 150:
-                rear_zones['rear_left'].append(distance)
-            
-            # Rear center: straight back (150° to 180° and -180° to -150°)
-            elif 150 < angle_deg <= 180 or -180 <= angle_deg < -150:
-                rear_zones['rear_center'].append(distance)
-            
-            # Rear right: -150° to -120°
-            elif -150 <= angle_deg < -120:
-                rear_zones['rear_right'].append(distance)
-        
-        # Calculate min distance per zone
-        clearances = {}
-        for zone, distances in rear_zones.items():
-            if distances:
-                clearances[zone] = min(distances)
-            else:
-                clearances[zone] = float('inf')  # No obstacle detected
-        
-        logger.debug(
-            f"[REAR ZONES] Left:{clearances['rear_left']:.2f}m, "
-            f"Center:{clearances['rear_center']:.2f}m, "
-            f"Right:{clearances['rear_right']:.2f}m"
-        )
-        
-        return clearances
-
+    
     def _is_dead_end(self, clearances: Dict, rear_clear: float) -> bool:
         """
         Detect if robot is trapped in dead-end corner.
         
-        Dead-end criteria: ALL sides blocked within critical distance.
+        Dead-end: ALL 4 sides blocked within critical distance.
         """
-        DEAD_END_THRESHOLD = 0.18  # Stricter than normal abort (0.20m)
+        DEAD_END_THRESHOLD = 0.18
         
         front = clearances.get('front', float('inf'))
         left = clearances.get('left', float('inf'))
         right = clearances.get('right', float('inf'))
         
-        # All 4 sides blocked
         all_sides_blocked = (
             front < DEAD_END_THRESHOLD and
             left < DEAD_END_THRESHOLD and
@@ -409,14 +511,13 @@ class LidarSafetyMonitor:
         
         if all_sides_blocked:
             logger.error(
-                f"[DEAD-END DETECTED] F:{front:.2f} L:{left:.2f} "
+                f"[DEAD-END] F:{front:.2f} L:{left:.2f} "
                 f"R:{right:.2f} Rear:{rear_clear:.2f} - ALL < {DEAD_END_THRESHOLD}m"
             )
             return True
         
         return False
     
-    # Command Generators
     def _smart_recovery_command(
         self, 
         obstacle_angle: float, 
@@ -425,161 +526,130 @@ class LidarSafetyMonitor:
         robot_pos: Optional[Dict] = None
     ) -> Dict:
         """
-        Generate smart recovery command with rear collision prevention.
+        Generate smart recovery command with rear validation.
         """
         left_clear = clearances.get('left', 0)
         right_clear = clearances.get('right', 0)
-        
-        # Check rear clearance for backup safety
         rear_clear = self._get_rear_clearance(obstacles_with_angles)
         
-        # Detect tight corners (both sides blocked)
+        # Check dead-end
         is_tight_corner = left_clear < 0.3 and right_clear < 0.3
         
         # STRATEGY 1: ROTATE-ONLY if rear blocked or tight corner
         if rear_clear < 0.25 or is_tight_corner:
-            # Determine rotation direction (toward more open side)
-            if left_clear > right_clear + 0.1:
-                angular = 0.8  # Strong left rotation
-                direction = "left"
-            elif right_clear > left_clear + 0.1:
-                angular = -0.8  # Strong right rotation
-                direction = "right"
-            else:
-                # Equal clearance: rotate away from obstacle
-                angular = 0.8 if obstacle_angle > 0 else -0.8
-                direction = "away_from_obstacle"
+            rotation_dir = self._choose_rotation_direction(
+                left_clear, right_clear, obstacle_angle
+            )
             
             logger.warning(
-                f"[ROTATE-ONLY RECOVERY] Rear: {rear_clear:.2f}m, "
-                f"L/R: {left_clear:.2f}/{right_clear:.2f}m → Rotate {direction}"
+                f"[ROTATE-ONLY] Rear: {rear_clear:.2f}m, "
+                f"L/R: {left_clear:.2f}/{right_clear:.2f}m → Rotate {rotation_dir}"
             )
             
             return {
                 'action': 'rotate_recovery',
                 'parameters': {
-                    'linear_velocity': 0.0,  # NO BACKUP - rotate only
-                    'angular_velocity': angular,
-                    'duration': 0.8  # Quick rotation
+                    'linear_velocity': 0.0,
+                    'angular_velocity': 0.8 if rotation_dir == 'left' else -0.8,
+                    'duration': 1.5  # INCREASED from 0.8s
                 },
-                'reason': f'rotate_only_{direction}_rear_blocked'
+                'reason': f'rotate_only_{rotation_dir}_rear_blocked'
             }
         
-        # STRATEGY 2: INTELLIGENT BACKUP with rear+front analysis
-        else:
-            # Get directional rear clearances
-            rear_zones = self._get_rear_clearance_by_direction(obstacles_with_angles)
-            
-            rear_left = rear_zones.get('rear_left', 0)
-            rear_center = rear_zones.get('rear_center', 0)
-            rear_right = rear_zones.get('rear_right', 0)
-            
-            # Determine best backup direction using weighted scoring
-            backup_scores = {
-                'center': rear_center * 1.2,  # Prefer straight backup (1.2x weight)
-                'left': rear_left * 1.0,
-                'right': rear_right * 1.0
-            }
-            
-            # Find best direction
-            best_direction = max(backup_scores.items(), key=lambda x: x[1])
-            backup_direction = best_direction[0]
-            backup_clearance = rear_zones.get(f'rear_{backup_direction}', 0)
-            
-            # Safety check: minimum clearance required
-            MIN_BACKUP_CLEARANCE = 0.25
-            if backup_clearance < MIN_BACKUP_CLEARANCE:
-                # Can't backup safely in any direction → force rotate-only
-                logger.warning(
-                    f"[BACKUP ABORT] All rear zones blocked "
-                    f"(best: {backup_clearance:.2f}m < {MIN_BACKUP_CLEARANCE}m)"
-                )
-                
-                # Fall back to rotate-only strategy
-                if left_clear > right_clear + 0.1:
-                    angular = 0.8
-                    direction = "left"
-                else:
-                    angular = -0.8
-                    direction = "right"
-                
-                return {
-                    'action': 'forced_rotate_recovery',
-                    'parameters': {
-                        'linear_velocity': 0.0,
-                        'angular_velocity': angular,
-                        'duration': 1.0
-                    },
-                    'reason': f'backup_blocked_rotate_{direction}'
-                }
-            
-            # Determine angular velocity based on backup direction
-            if backup_direction == 'center':
-                # Straight backup - add slight bias away from front obstacle
-                if obstacle_angle > 10:  # Obstacle on left
-                    angular = -0.2  # Slight right turn during backup
-                    bias = "right"
-                elif obstacle_angle < -10:  # Obstacle on right
-                    angular = 0.2  # Slight left turn during backup
-                    bias = "left"
-                else:
-                    angular = 0.0  # Pure straight backup
-                    bias = "straight"
-                
-                logger.info(
-                    f"[SMART BACKUP] Center backup with {bias} bias "
-                    f"(clearance: {backup_clearance:.2f}m)"
-                )
-            
-            elif backup_direction == 'left':
-                angular = 0.5  # Moderate left turn while backing
-                logger.info(
-                    f"[SMART BACKUP] Left backup "
-                    f"(rear-left: {backup_clearance:.2f}m)"
-                )
-            
-            else:  # right
-                angular = -0.5  # Moderate right turn while backing
-                logger.info(
-                    f"[SMART BACKUP] Right backup "
-                    f"(rear-right: {backup_clearance:.2f}m)"
-                )
-            
-            # Adaptive duration based on available clearance
-            # Formula: duration = min(0.6s, clearance / 0.35)
-            # Examples: 
-            #   - 0.7m clearance → 0.6s (capped)
-            #   - 0.4m clearance → 0.57s
-            #   - 0.3m clearance → 0.43s
-            safe_duration = min(0.6, backup_clearance / 0.35)
-            
-            return {
-                'action': 'smart_backup_recovery',
-                'parameters': {
-                    'linear_velocity': -0.20,
-                    'angular_velocity': angular,
-                    'duration': safe_duration
-                },
-                'reason': f'smart_backup_{backup_direction}',
-                'rear_clearance': backup_clearance,
-                'backup_direction': backup_direction
-            }
+        # STRATEGY 2: SAFE BACKUP with adaptive duration
+        backup_dir = self._choose_backup_direction(
+            left_clear, right_clear, obstacle_angle
+        )
+        
+        # Adaptive duration based on rear clearance
+        adaptive_duration = min(1.0, rear_clear / 0.30)
+        
+        logger.info(
+            f"[SAFE BACKUP] Rear: {rear_clear:.2f}m, "
+            f"L/R: {left_clear:.2f}/{right_clear:.2f}m → "
+            f"Backup {adaptive_duration:.2f}s + turn {backup_dir}"
+        )
+        
+        return {
+            'action': 'safe_backup_recovery',
+            'parameters': {
+                'linear_velocity': -0.18,  # REDUCED from -0.20
+                'angular_velocity': 0.6 if backup_dir == 'left' else -0.6,
+                'duration': adaptive_duration
+            },
+            'reason': f'safe_backup_{backup_dir}',
+            'rear_clearance': rear_clear
+        }
     
-    # Statistics & Debugging    
+    def _choose_rotation_direction(
+        self,
+        left_clear: float,
+        right_clear: float,
+        obstacle_angle: float
+    ) -> str:
+        """
+        Choose rotation direction INTELLIGENTLY.
+        
+        Rules:
+        1. If one side MUCH clearer (>0.2m diff) → rotate to that side
+        2. Else → rotate AWAY from obstacle
+        """
+        CLEAR_DIFF_THRESHOLD = 0.2
+        
+        if left_clear > right_clear + CLEAR_DIFF_THRESHOLD:
+            return 'left'
+        elif right_clear > left_clear + CLEAR_DIFF_THRESHOLD:
+            return 'right'
+        else:
+            # Rotate away from obstacle
+            return 'right' if obstacle_angle > 0 else 'left'
+    
+    def _choose_backup_direction(
+        self,
+        left_clear: float,
+        right_clear: float,
+        obstacle_angle: float
+    ) -> str:
+        """Choose backup turn direction (same logic as rotation)."""
+        return self._choose_rotation_direction(left_clear, right_clear, obstacle_angle)
+    
+    def _emergency_stop(self) -> Dict:
+        """Generate emergency stop command."""
+        return {
+            'action': 'stop',
+            'parameters': {
+                'linear_velocity': 0.0,
+                'angular_velocity': 0.0,
+                'duration': 0.1
+            },
+            'reason': 'emergency_stop'
+        }
+    
+    def _pause_command(self) -> Dict:
+        """Generate pause command during ESCAPE_WAIT."""
+        return {
+            'action': 'stop',
+            'parameters': {
+                'linear_velocity': 0.0,
+                'angular_velocity': 0.0,
+                'duration': 0.3
+            },
+            'reason': 'escape_wait_pause'
+        }
+    
     def get_stats(self) -> Dict:
         """Get safety monitor statistics."""
         return {
             'total_aborts': self.abort_count,
-            'in_cooldown': time.time() - self.last_abort_time < self.cooldown_duration,
-            'cooldown_remaining': max(
-                0.0, 
-                self.cooldown_duration - (time.time() - self.last_abort_time)
-            ),
+            'current_state': self.state.value,
+            'consecutive_same_spot_aborts': self.consecutive_aborts_at_same_spot,
             'movement_state': 'forward' if self._is_moving_forward() else 'turning'
         }
     
     def reset_stats(self):
-        """Reset abort counter (for testing)."""
+        """Reset statistics (for testing)."""
         self.abort_count = 0
-        self.last_abort_time = 0.0
-        logger.info("[STATS RESET] Abort counter cleared")
+        self.last_abort_position = None
+        self.consecutive_aborts_at_same_spot = 0
+        self.state = SafetyState.NORMAL
+        logger.info("[STATS RESET] Safety monitor cleared")

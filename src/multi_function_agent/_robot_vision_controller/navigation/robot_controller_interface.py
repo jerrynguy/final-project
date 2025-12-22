@@ -385,6 +385,7 @@ class RobotControllerInterface(Node):
         try:
             action = navigation_decision.get('action', 'stop')
             parameters = navigation_decision.get('parameters', {})
+            is_force_escape = navigation_decision.get('force_execute', False)
             
             # Create Twist directly
             class TwistMsg:
@@ -413,6 +414,7 @@ class RobotControllerInterface(Node):
             success = await self._send_command(
                 twist_msg,
                 parameters.get('duration', 1.0),
+                force_execute=is_force_escape
             )
             
             if success:
@@ -426,7 +428,12 @@ class RobotControllerInterface(Node):
             self.robot_status.state = RobotState.ERROR
             return False
 
-    async def _send_command(self, twist: Twist, duration: float) -> bool:
+    async def _send_command(
+            self, 
+            twist: Twist, 
+            duration: float,
+            force_execute: bool = False
+        ) -> bool:
         """
         Execute command with SINGLE critical abort check.
         """
@@ -452,8 +459,11 @@ class RobotControllerInterface(Node):
             self._current_angular_vel = twist.angular.z
             
             for i in range(max(1, iterations)):
-                if self.lidar_data is not None:
-                    abort_result = safety_monitor.check_critical_abort(self.lidar_data)
+                if not force_execute and self.lidar_data is not None:
+                    abort_result = safety_monitor.check_critical_abort(
+                        self.lidar_data,
+                        robot_pos=self.ros_node.get_robot_pose()
+                    )
                     
                     if abort_result['abort']:
                         logger.error(
@@ -486,6 +496,11 @@ class RobotControllerInterface(Node):
                                 self.ros_node.publish_stop()
                                 await asyncio.sleep(0.01)
                             return False
+                        
+                if force_execute and i == 0:
+                    logger.warning(
+                        f"[FORCE EXECUTE] Bypassing safety checks for {duration:.1f}s"
+                    )
                 
                 # No velocity scaling - publish as-is
                 self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)

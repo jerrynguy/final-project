@@ -34,8 +34,8 @@ class StuckDetector:
         self,
         history_window: int = 20,
         position_variance_threshold: float = 0.01,  # 10cm
-        stuck_time_threshold: float = 10.0,  # seconds
-        displacement_threshold: float = 0.3
+        stuck_time_threshold: float = 5.0,  # seconds
+        displacement_threshold: float = 0.1
     ):
         """
         Initialize stuck detector.

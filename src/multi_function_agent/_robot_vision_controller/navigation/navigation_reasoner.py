@@ -67,21 +67,39 @@ class NavigationReasoner:
         self. frontier_detector = FrontierDetector()    
         self.use_frontier_detection = True
 
-    def _get_navigation_zone(self, front_clear: float) -> int:
+    def _get_navigation_zone(
+        self, 
+        front_clear: float,
+        left_clear: float,
+        right_clear: float
+    ) -> int:
         """
-        Determine navigation zone based on front clearance.
+        Xác định zone an toàn dựa trên clearances tổng hợp.
         
         Zones:
-        - Zone 3 (FAR): 0.7m+ → Normal forward movement
-        - Zone 2 (MEDIUM): 0.3-0.7m → Slow + aggressive steering
-        - Zone 1 (CRITICAL): <0.3m → Stop/rotate/backup decision
+        - Zone 3 (FAR): Front > 0.7m VÀ (Left > 0.5m OR Right > 0.5m)
+        - Zone 2 (MEDIUM): Front 0.3-0.7m HOẶC bị kẹp 2 bên
+        - Zone 1 (CRITICAL): Front < 0.3m
         """
-        if front_clear >= 0.7:
-            return 3  # FAR - normal speed
-        elif front_clear >= 0.3:
-            return 2  # MEDIUM - slow + steer
-        else:
-            return 1  # CRITICAL - stop/rotate
+        
+        # RULE 1: Front < 0.3m → CRITICAL (không phụ thuộc sides)
+        if front_clear < 0.3:
+            return 1
+        
+        # RULE 2: Front < 0.7m → MEDIUM (không kể sides)
+        if front_clear < 0.7:
+            return 2
+        
+        # RULE 3: Front OK nhưng bị kẹp 2 bên → MEDIUM
+        if left_clear < 0.5 and right_clear < 0.5:
+            logger.warning(
+                f"[ZONE CHECK] Tight corridor: L={left_clear:.2f} R={right_clear:.2f} "
+                f"→ Zone 2 (despite Front={front_clear:.2f})"
+            )
+            return 2
+        
+        # RULE 4: All clear → FAR
+        return 3
 
     def _decide_avoidance_direction(
         self, 
@@ -635,7 +653,11 @@ class NavigationReasoner:
         boosted_speed = self.base_speed * self.exploration_boost
         
         # Determine navigation zone
-        zone = self._get_navigation_zone(front_clear)
+        zone = self._get_navigation_zone(
+            front_clear=clearances.get('forward', 999),
+            left_clear=clearances.get('left', 999),
+            right_clear=clearances.get('right', 999)
+        )
         
         logger.debug(
             f"[NAV ZONE {zone}] F:{front_clear:.2f} L:{left_clear:.2f} R:{right_clear:.2f}"
