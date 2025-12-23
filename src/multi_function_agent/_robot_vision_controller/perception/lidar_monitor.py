@@ -653,3 +653,43 @@ class LidarSafetyMonitor:
         self.consecutive_aborts_at_same_spot = 0
         self.state = SafetyState.NORMAL
         logger.info("[STATS RESET] Safety monitor cleared")
+
+    def should_trigger_nav2_rescue(self) -> bool:
+        """
+        Check nếu nên trigger Nav2 rescue.
+        
+        Điều kiện: Force escape thất bại (vẫn ở ESCAPE_WAIT sau >5s)
+        
+        Returns:
+            True nếu cần Nav2 rescue, False nếu không
+        """
+        if self.state != SafetyState.ESCAPE_WAIT:
+            return False
+        
+        current_time = time.time()
+        elapsed = current_time - self.escape_start_time
+        
+        # Force escape thất bại nếu:
+        # 1. Đã >5s trong ESCAPE_WAIT
+        # 2. Consecutive aborts >= 3 (đã trigger force escape)
+        if elapsed > 5.0 and self.consecutive_aborts_at_same_spot >= 3:
+            logger.error(
+                f"[FORCE ESCAPE FAILED] Still in ESCAPE_WAIT after {elapsed:.1f}s "
+                f"(consecutive aborts: {self.consecutive_aborts_at_same_spot}) "
+                f"→ Nav2 rescue needed"
+            )
+            return True
+        
+        return False
+
+    def reset_after_nav2_rescue(self):
+        """
+        Reset state sau khi Nav2 rescue thành công.
+        """
+        self.state = SafetyState.NORMAL
+        self.consecutive_aborts_at_same_spot = 0
+        self.last_abort_position = None
+        self.escape_start_time = 0.0
+        self.abort_count = 0
+        
+        logger.info("[RESET] Safety monitor reset after Nav2 rescue")

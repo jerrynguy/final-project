@@ -15,7 +15,6 @@ from multi_function_agent._robot_vision_controller.perception.slam_controller im
 from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
 from multi_function_agent._robot_vision_controller.perception.rtsp_stream_handler import RTSPStreamHandler
 from multi_function_agent._robot_vision_controller.perception.robot_vision_analyzer import RobotVisionAnalyzer
-from multi_function_agent._robot_vision_controller.perception.detector.stuck_detector import StuckDetector
 
 from multi_function_agent._robot_vision_controller.navigation.navigation_reasoner import NavigationReasoner
 from multi_function_agent._robot_vision_controller.navigation.robot_controller_interface import RobotControllerInterface
@@ -112,13 +111,6 @@ async def _robot_vision_controller(
             safety_level=safety_level, 
             max_speed=robot_config["max_speed"]
         )
-
-        stuck_detector = StuckDetector(
-            history_window=20,
-            position_variance_threshold=0.01,
-            stuck_time_threshold=15.0
-        )
-        logger.info("✅ Stuck pattern detector initialized")
 
         exploration_boost = robot_config.get("exploration_speed_boost", 1.0)
         navigation_reasoner.set_exploration_boost(exploration_boost)
@@ -234,7 +226,6 @@ async def _robot_vision_controller(
             navigation_goal,
             safety_validator,
             safety_monitor,
-            stuck_detector,
             mission_controller,
             slam_controller=slam_controller,
             nav2_ready=nav2_ready,
@@ -331,17 +322,16 @@ def _mission_directive_to_nav2_goal(
 def _calculate_nav2_escape_goal(
     robot_pos: Dict,
     clearances: Dict,
-    slam_controller: Optional['SLAMController'],
+    slam_controller: Optional[SLAMController],
     stuck_type: str
 ) -> Optional[Dict]:
     """
-    Calculate Nav2 escape goal using global map.
+    Calculate Nav2 escape goal using CLEARANCE-BASED direction.
     
     Strategy:
-    1. Get SLAM map from slam_controller
-    2. Find nearest free space 2-3 meters away
-    3. Prefer direction opposite to obstacles
-    4. Return goal (x, y, theta)
+    1. Find direction with MAX clearance (front/left/right/rear)
+    2. Set goal 2.5m away in that direction
+    3. Validate with SLAM map if available
     """
     if robot_pos is None:
         logger.error("[NAV2 GOAL] No robot position")
@@ -351,15 +341,30 @@ def _calculate_nav2_escape_goal(
     current_y = robot_pos['y']
     current_theta = robot_pos.get('theta', 0.0)
     
-    # Strategy 1: Try opposite direction (180° turn)
-    # Works best for corner/wall traps
     import numpy as np
     
-    # Calculate goal 2.5m away in opposite direction
-    escape_distance = 2.5  # meters
+    # ✅ FIX: Use clearance-based direction instead of current heading
+    # Build direction map with (clearance, angle_offset)
+    directions = {
+        'front': (clearances.get('forward', 0), 0.0),          # 0° (straight)
+        'left': (clearances.get('left', 0), np.pi/2),         # 90° (left)
+        'right': (clearances.get('right', 0), -np.pi/2),      # -90° (right)
+        'rear': (clearances.get('rear', 0), np.pi)            # 180° (back)
+    }
     
-    # Opposite direction
-    escape_theta = current_theta + np.pi  # 180° turn
+    # Choose direction with MAX clearance
+    best_dir_name, (best_clearance, angle_offset) = max(
+        directions.items(), 
+        key=lambda x: x[1][0]
+    )
+    
+    logger.info(
+        f"[NAV2 GOAL] Best escape direction: {best_dir_name} "
+        f"(clearance: {best_clearance:.2f}m)"
+    )
+    
+    # Calculate goal position
+    escape_theta = current_theta + angle_offset
     
     # Normalize angle to [-pi, pi]
     while escape_theta > np.pi:
@@ -367,6 +372,7 @@ def _calculate_nav2_escape_goal(
     while escape_theta < -np.pi:
         escape_theta += 2 * np.pi
     
+    escape_distance = 2.5  # meters
     goal_x = current_x + escape_distance * np.cos(escape_theta)
     goal_y = current_y + escape_distance * np.sin(escape_theta)
     
@@ -376,7 +382,7 @@ def _calculate_nav2_escape_goal(
         f"→ Goal: ({goal_x:.2f}, {goal_y:.2f}, {np.degrees(escape_theta):.0f}°)"
     )
     
-    # Strategy 2: If SLAM map available, validate goal is free
+    # Strategy 2: Validate with SLAM map if available
     if slam_controller and slam_controller.is_running:
         try:
             from multi_function_agent._robot_vision_controller.core.ros2_node.ros2_node import get_ros2_node
@@ -392,24 +398,37 @@ def _calculate_nav2_escape_goal(
                 if not is_free:
                     logger.warning(
                         f"[NAV2 GOAL] Goal ({goal_x:.2f}, {goal_y:.2f}) "
-                        f"not in free space, trying alternative..."
+                        f"not in free space, trying alternatives..."
                     )
                     
-                    # Try perpendicular directions
-                    for angle_offset in [np.pi/2, -np.pi/2, np.pi/4, -np.pi/4]:
-                        alt_theta = current_theta + angle_offset
+                    # Try other directions in order of clearance
+                    sorted_dirs = sorted(
+                        directions.items(), 
+                        key=lambda x: x[1][0], 
+                        reverse=True
+                    )[1:]  # Skip best (already tried)
+                    
+                    for alt_name, (alt_clear, alt_offset) in sorted_dirs:
+                        alt_theta = current_theta + alt_offset
+                        
+                        # Normalize
+                        while alt_theta > np.pi:
+                            alt_theta -= 2 * np.pi
+                        while alt_theta < -np.pi:
+                            alt_theta += 2 * np.pi
+                        
                         alt_x = current_x + escape_distance * np.cos(alt_theta)
                         alt_y = current_y + escape_distance * np.sin(alt_theta)
                         
                         if _check_map_position_free(alt_x, alt_y, slam_map):
                             logger.info(
-                                f"[NAV2 GOAL] Found free alternative: "
+                                f"[NAV2 GOAL] Found free alternative: {alt_name} "
                                 f"({alt_x:.2f}, {alt_y:.2f})"
                             )
                             goal_x, goal_y, escape_theta = alt_x, alt_y, alt_theta
                             break
                     else:
-                        logger.error("[NAV2 GOAL] No free space found nearby")
+                        logger.error("[NAV2 GOAL] No free space found in any direction")
                         return None
         
         except Exception as e:
@@ -429,6 +448,9 @@ def _check_map_position_free(
 ) -> bool:
     """
     Check if position (x, y) is in free space on SLAM map.
+    
+    Note: Currently simplified validation (bounds check only).
+    TODO: Add occupancy grid check when full map data available.
     """
     try:
         # Convert world coordinates to grid coordinates
@@ -444,12 +466,18 @@ def _check_map_position_free(
         height = slam_map.get('height', 0)
         
         if grid_x < 0 or grid_x >= width or grid_y < 0 or grid_y >= height:
-            logger.warning(f"[MAP CHECK] Position out of bounds")
+            logger.warning(
+                f"[MAP CHECK] Position out of map bounds: "
+                f"grid=({grid_x},{grid_y}), map=({width}x{height})"
+            )
             return False
         
-        # Check occupancy (simplified - real map data would be checked here)
+        # TODO: Check actual occupancy data when available
         # For now, assume position is free if within bounds
-        # TODO: Add actual occupancy grid check when full map data available
+        logger.debug(
+            f"[MAP CHECK] Position within bounds: "
+            f"world=({x:.2f},{y:.2f}), grid=({grid_x},{grid_y})"
+        )
         
         return True
         
@@ -548,7 +576,6 @@ async def run_robot_control_loop(
     navigation_goal: str,
     safety_validator: SafetyValidator,
     safety_monitor: LidarSafetyMonitor,
-    stuck_detector: StuckDetector,
     mission_controller: MissionController, 
     slam_controller: Optional[SLAMController] = None,
     nav2_ready: bool = False,
@@ -580,9 +607,6 @@ async def run_robot_control_loop(
         'reason': 'initialization'
     }
 
-    if hasattr(mission_controller._mission_instance, 'stuck_detector'):
-        mission_controller._mission_instance.stuck_detector = stuck_detector
-
     while max_iterations is None or iteration < max_iterations:
         try:
             # STEP 0: Frame Acquisition
@@ -607,7 +631,6 @@ async def run_robot_control_loop(
                 logger.warning("[POSITION] No odometry data available")
 
             # STEP 1: Critical Abort Check (SINGLE LAYER)
-            # CHANGED: Unified single-layer safety check
             abort_result = safety_monitor.check_critical_abort(
                 lidar_snapshot,
                 robot_pos=robot_pos
@@ -631,95 +654,59 @@ async def run_robot_control_loop(
                 await asyncio.sleep(0.1)
                 continue
 
-            # STEP 2: Stuck Detection
-            stuck_result = stuck_detector.update(
-                robot_pos,
-                action=navigation_decision.get('action', 'unknown') if iteration > 0 else 'init'
-            )
-
-            if stuck_result['is_stuck']:
+            # STEP 2: Nav2 Rescue Check
+            if nav2_ready and safety_monitor.should_trigger_nav2_rescue():
                 logger.error(
-                    f"[STUCK DETECTED] Type: {stuck_result['stuck_type']}, "
-                    f"Duration: {stuck_result['stuck_duration']:.1f}s"
+                    "[NAV2 RESCUE] Force escape failed → Activating global planner"
                 )
                 
-                # Check if persistent stuck → Nav2 rescue
-                if stuck_result['stuck_duration'] > 10.0 and nav2_ready:
-                    logger.error(
-                        f"[PERSISTENT STUCK] {stuck_result['stuck_duration']:.1f}s "
-                        f"→ Activating Nav2 Global Planner Rescue"
-                    )
-                    
-                    # Calculate escape goal using global map
-                    escape_goal = _calculate_nav2_escape_goal(
-                        robot_pos=robot_pos,
-                        clearances=cached_vision_analysis.get('clearances', {}),
-                        slam_controller=slam_controller,
-                        stuck_type=stuck_result['stuck_type']
-                    )
-                    
-                    if escape_goal:
-                        logger.warning(
-                            f"[NAV2 RESCUE] Sending goal: "
-                            f"({escape_goal['x']:.2f}, {escape_goal['y']:.2f})"
-                        )
-                        
-                        # Send Nav2 goal (blocking for up to 30s)
-                        rescue_success = await _execute_nav2_rescue(
-                            robot_interface=robot_interface,
-                            goal=escape_goal,
-                            timeout=30.0,
-                            safety_monitor=safety_monitor
-                        )
-                        
-                        if rescue_success:
-                            logger.info("[NAV2 RESCUE] ✅ Successfully escaped!")
-                            stuck_detector.reset()
-                            await asyncio.sleep(0.5)
-                            continue
-                        else:
-                            logger.error("[NAV2 RESCUE] ❌ Failed to escape via Nav2")
-
-                            # Mark Nav2 rescue as failed for explore mission
-                            if mission_controller.get_current_mission_type() == 'explore_area':
-                                if hasattr(mission_controller._mission_instance, '_nav2_rescue_failed'):
-                                    mission_controller._mission_instance._nav2_rescue_failed = True
-    
-                    else:
-                        logger.error("[NAV2 RESCUE] ❌ Could not calculate escape goal")
+                # Get current clearances from last abort
+                clearances = abort_result.get('clearances', {}) if abort_result else {}
                 
-                # Generate escape command (fallback if Nav2 failed or not ready)
-                clearances = cached_vision_analysis.get('clearances', {})
-                # Add rear clearance if available
-                if lidar_snapshot:
-                    from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
-                    temp_monitor = LidarSafetyMonitor()
-                    
-                    obstacles_with_angles = temp_monitor._get_obstacles_with_angles(lidar_snapshot)
-                    rear_clear = temp_monitor._get_rear_clearance(obstacles_with_angles)
-                    
-                    # Add null check
-                    if rear_clear is not None:
-                        clearances['rear'] = rear_clear
-                    else:
-                        clearances['rear'] = 0.5  # Safe default
-                
-                escape_cmd = stuck_detector.generate_escape_command(
-                    stuck_result['stuck_type'],
-                    clearances
+                # Calculate escape goal
+                escape_goal = _calculate_nav2_escape_goal(
+                    robot_pos=robot_pos,
+                    clearances=clearances,
+                    slam_controller=slam_controller,
+                    stuck_type='force_escape_timeout'
                 )
                 
-                logger.warning(f"[ESCAPE] Executing: {escape_cmd['reason']}")
-                
-                # Execute escape
-                await robot_interface.execute_command(escape_cmd)
-                results["navigation_decisions"].append(escape_cmd)
-                
-                # Adaptive delay based on command duration
-                escape_duration = escape_cmd['parameters'].get('duration', 1.0)
-                await asyncio.sleep(escape_duration * 0.3)  # 30% buffer
-                
-                continue
+                if escape_goal:
+                    logger.warning(
+                        f"[NAV2 RESCUE] Sending global escape goal: "
+                        f"({escape_goal['x']:.2f}, {escape_goal['y']:.2f})"
+                    )
+                    
+                    rescue_success = await _execute_nav2_rescue(
+                        robot_interface=robot_interface,
+                        goal=escape_goal,
+                        timeout=30.0,
+                        safety_monitor=safety_monitor
+                    )
+                    
+                    if rescue_success:
+                        # Reset safety monitor
+                        safety_monitor.reset_after_nav2_rescue()
+                        
+                        logger.info("[NAV2 RESCUE] ✅ Escaped successfully, resuming mission")
+                        results["navigation_decisions"].append({
+                            'action': 'nav2_rescue_success',
+                            'reason': 'global_planner_escape'
+                        })
+                        
+                        # Skip vision/navigation for this iteration
+                        await asyncio.sleep(0.5)
+                        continue
+                    else:
+                        logger.error(
+                            "[NAV2 RESCUE] ❌ Failed after 30s, mission abort"
+                        )
+                        results["final_status"] = "nav2_rescue_failed"
+                        break
+                else:
+                    logger.error("[NAV2 RESCUE] Could not calculate escape goal, mission abort")
+                    results["final_status"] = "no_escape_goal"
+                    break
 
             # STEP 3: Vision Analysis (Cached at 2Hz)
             # Vision analysis (cached at 2Hz)

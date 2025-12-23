@@ -35,7 +35,6 @@ src/multi_function_agent/_robot_vision_controller/perception/rtsp_stream_handler
 src/multi_function_agent/_robot_vision_controller/perception/slam_controller.py
 src/multi_function_agent/_robot_vision_controller/perception/detector/frontier_detector.py
 src/multi_function_agent/_robot_vision_controller/perception/detector/spatial_detector.py
-src/multi_function_agent/_robot_vision_controller/perception/detector/stuck_detector.py
 src/multi_function_agent/_robot_vision_controller/utils/geometry_utils.py
 src/multi_function_agent/_robot_vision_controller/utils/movement_commands.py
 src/multi_function_agent/_robot_vision_controller/utils/ros2_stubs.py
