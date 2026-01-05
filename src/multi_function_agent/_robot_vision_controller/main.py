@@ -634,23 +634,76 @@ async def run_robot_control_loop(
             abort_result = safety_monitor.check_critical_abort(
                 lidar_snapshot,
                 robot_pos=robot_pos
-                )
-            
+            )
+
             if abort_result['abort']:
                 logger.error(
                     f"[CRITICAL ABORT] Obstacle at {abort_result['min_distance']:.3f}m"
                 )
+                
+                # Handle Nav2 rescue request from deadlock/timeout
+                if abort_result.get('request_nav2_rescue') and nav2_ready:
+                    logger.error("=" * 60)
+                    logger.error("[NAV2 RESCUE REQUESTED] Deadlock/Timeout detected")
+                    logger.error("=" * 60)
+                    
+                    # Calculate escape goal using 360° clearance data
+                    clearances = abort_result.get('clearances', {})
+                    
+                    # Convert sector clearances to direction clearances
+                    direction_clearances = {
+                        'forward': clearances.get(0, 0.0),
+                        'left': max(clearances.get(270, 0.0), clearances.get(300, 0.0)),
+                        'right': max(clearances.get(90, 0.0), clearances.get(60, 0.0)),
+                        'rear': clearances.get(180, 0.0)
+                    }
+                    
+                    escape_goal = _calculate_nav2_escape_goal(
+                        robot_pos=robot_pos,
+                        clearances=direction_clearances,  # Use converted clearances
+                        slam_controller=slam_controller,
+                        stuck_type='force_escape_deadlock'
+                    )
+                    
+                    if escape_goal:
+                        logger.warning(
+                            f"[NAV2 RESCUE] Sending global escape goal: "
+                            f"({escape_goal['x']:.2f}, {escape_goal['y']:.2f})"
+                        )
+                        
+                        rescue_success = await _execute_nav2_rescue(
+                            robot_interface=robot_interface,
+                            goal=escape_goal,
+                            timeout=30.0,
+                            safety_monitor=safety_monitor
+                        )
+                        
+                        if rescue_success:
+                            safety_monitor.reset_after_nav2_rescue()
+                            logger.info("[NAV2 RESCUE] ✅ Escaped successfully")
+                            
+                            results["navigation_decisions"].append({
+                                'action': 'nav2_rescue_success',
+                                'reason': 'deadlock_escape'
+                            })
+                            
+                            await asyncio.sleep(0.5)
+                            continue
+                        else:
+                            logger.error("[NAV2 RESCUE] ❌ Failed after 30s")
+                            results["final_status"] = "nav2_rescue_failed_deadlock"
+                            break
+                    else:
+                        logger.error("[NAV2 RESCUE] Cannot calculate escape goal")
+                        results["final_status"] = "no_escape_goal_deadlock"
+                        break
+
                 await robot_interface.execute_command(abort_result['command'])
                 results["navigation_decisions"].append({
                     'action': 'critical_abort',
                     'distance': abort_result['min_distance'],
                     'reason': abort_result.get('reason', 'critical')
                 })
-                await asyncio.sleep(0.1)
-                continue
-
-            elif abort_result['command'] is not None:
-                await robot_interface.execute_command(abort_result['command'])
                 await asyncio.sleep(0.1)
                 continue
 

@@ -1,0 +1,1 @@
+![Workflow Diagram](src/multi_function_agent/_robot_vision_controller/images/nat_container.png)
