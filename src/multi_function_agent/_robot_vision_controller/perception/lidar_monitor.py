@@ -375,123 +375,111 @@ class LidarSafetyMonitor:
         obstacle_angle_deg: float
     ) -> Tuple[str, int, float]:
         """
-        Select BEST escape direction using 360° clearance analysis.
+        Select escape direction with NORMALIZED + OPTIMIZED weights.
         
-        Strategy:
-        1. Filter sectors with clearance > 0.30m (safe threshold)
-        2. Score by: clearance (40%) + obstacle avoidance (30%) + 
-                    opposite direction bonus (20%) + forward bias (10%)
-        3. Select highest-scoring sector
-        4. Map sector to action type (forward/turn/rotate/backup)
+        ✅ NORMALIZATION: All factors in [0.0-1.0] (Gemini's principle)
+        ✅ WEIGHTS: Balanced for safety + efficiency
+        ✅ SMOOTH: Gradient-based scoring (no cliff effects)
         """
-        # --- CONFIGURATION ---
-        SAFE_THRESHOLD = 0.30      # Minimum clearance (meters)
-        MAX_LIDAR_RANGE = 3.5      # Used for normalization
+        SAFE_THRESHOLD = 0.30
         
-        # Weights (Must sum to ~1.0)
-        W_CLEARANCE = 0.35         # Safety is #1 priority
-        W_FORWARD   = 0.25         # Aggressive forward bias (Claude's suggestion)
-        W_OBSTACLE  = 0.25         # Specific obstacle avoidance
-        W_OPPOSITE  = 0.15         # Escape from trap logic
-            
-        # Step 1: Filter safe sectors
+        # OPTIMAL WEIGHTS (After analysis)
+        # Safety-first but forward-capable
+        W_CLEARANCE = 0.35  # Dominant (safety)
+        W_OBSTACLE  = 0.25  # Secondary (safety)
+        W_OPPOSITE  = 0.20  # Strategic (escape direction)
+        W_FORWARD   = 0.20  # Efficiency (natural motion)
+        
+        # Filter safe sectors
         safe_sectors = {
-            sec: clr for sec, clr in sector_clearances.items()
-            if clr > SAFE_THRESHOLD
+            sector: clearance
+            for sector, clearance in sector_clearances.items()
+            if clearance > SAFE_THRESHOLD
         }
         
         if not safe_sectors:
-            logger.error(f"[ESCAPE] BLOCKED! All clearances < {SAFE_THRESHOLD}m")
             return ('none', 0, 0.0)
         
-        # Step 2: Calculate opposite direction from obstacle
+        # Calculate directions
         normalized_obstacle = obstacle_angle_deg % 360
         opposite_angle = (normalized_obstacle + 180) % 360
+        
         scored_sectors = []
-
-        # Step 3: Score each safe sector
+        
         for sector, clearance in safe_sectors.items():
-            # Factor 1: Clearance score (35% weight)
-            # Normalize to [0, 1] based on max LiDAR range
-            clearance_score = min(clearance / MAX_LIDAR_RANGE, 1.0)
+            # Factor 1: Clearance Score [0.0-1.0] ✓ NORMALIZED
+            clearance_score = min(clearance / 3.5, 1.0)
             
-            # Factor 2: Obstacle avoidance score (25% weight)
-            # Higher angular distance from obstacle = better
+            # Factor 2: Obstacle Avoidance [0.0-1.0] ✓ NORMALIZED
             angle_diff = min(
                 abs(sector - normalized_obstacle),
                 360 - abs(sector - normalized_obstacle)
             )
             obstacle_avoidance_score = angle_diff / 180.0
-            
-            # Factor 3: Opposite direction bonus (25% weight)
-            # Sectors near 180° from obstacle get bonus
+
+            # Factor 3: Opposite Bonus [0.0-1.0] ✓ NORMALIZED + SMOOTH
             angle_to_opposite = min(
                 abs(sector - opposite_angle),
                 360 - abs(sector - opposite_angle)
             )
-            opposite_bonus = 1.0 if angle_to_opposite < 60 else 0.0
             
-            # Factor 4: Forward bias (15% weight)
-            # Prefer forward-facing sectors for natural movement
+            # SMOOTH GRADIENT (not binary):
+            opposite_bonus = max(0.0, 1.0 - angle_to_opposite / 180.0)
+            
+            # Factor 4: Forward Bias [0.0-1.0] ✓ NORMALIZED
             if sector == 0:
-                forward_bias = 1.0  # Strong preference for straight ahead
+                forward_bias_score = 1.00  # Perfect forward
             elif sector in [330, 30]:
-                forward_bias = 0.85  # Slight turns forward
-            elif sector in [60, 300]:
-                forward_bias = 0.6  # Moderate turns
-            elif sector in [90, 270]:
-                forward_bias = 0.5  # Side movements
-            elif sector in [120, 240]:
-                forward_bias = 0.3  # Rear-side movements
-            else:  # 150, 180, 210 (rear hemisphere)
-                forward_bias = 0.0  # Reverse movements (least preferred)
+                forward_bias_score = 0.85  # Slight turn
+            elif sector in [300, 60]:
+                forward_bias_score = 0.60  # Moderate turn
+            elif sector in [270, 90]:
+                forward_bias_score = 0.40  # Side movement
+            elif sector in [240, 120]:
+                forward_bias_score = 0.20  # Rear-side
+            else:  # 150, 180, 210
+                forward_bias_score = 0.00  # Backward (worst)
             
-            # Weighted final score
+            # WEIGHTED TOTAL ✓ ALL NORMALIZED
             total_score = (
                 clearance_score * W_CLEARANCE +
                 obstacle_avoidance_score * W_OBSTACLE +
                 opposite_bonus * W_OPPOSITE +
-                forward_bias * W_FORWARD
+                forward_bias_score * W_FORWARD
             )
             
             scored_sectors.append((sector, clearance, total_score))
         
-        # Step 4: Sort & Select
-        # Sort by score (descending)
+        # Sort by score
         scored_sectors.sort(key=lambda x: x[2], reverse=True)
         
-        # Select best sector
-        best_sector, best_clearance, best_score = scored_sectors[0]
-        
-        # Log top 3 candidates for debugging
+        # Log top 3
         logger.info("[ESCAPE SELECTION] Top 3 candidates:")
         for i, (sector, clearance, score) in enumerate(scored_sectors[:3], 1):
             logger.info(
-                f"  {i}. Sector {sector:3d}°: clearance={clearance:.2f}m, "
-                f"score={score:.2f}"
+                f"  {i}. Sector {sector:3d}°: "
+                f"clearance={clearance:.2f}m, score={score:.3f}"
             )
+        
+        best_sector, best_clearance, best_score = scored_sectors[0]
         
         logger.info(
             f"[ESCAPE SELECTION] SELECTED: {best_sector}° "
-            f"(clearance: {best_clearance:.2f}m, score: {best_score:.2f})"
+            f"(clearance: {best_clearance:.2f}m, score: {best_score:.3f})"
         )
         
-        # Step 5: Map sector to action type
-        # Front hemisphere (0° ± 60°)
-        sec = best_sector % 360
-        
-        if (sec >= 350) or (sec <= 10):
+        # Map to action
+        if best_sector == 0:
             action = 'forward'
-        elif 10 < sec <= 60:
+        elif best_sector == 30:
             action = 'turn_right'
-        elif 300 <= sec < 350:
+        elif best_sector == 330:
             action = 'turn_left'
-        elif 60 < sec <= 150:
+        elif 60 <= best_sector <= 150:
             action = 'rotate_right'
-        elif 210 <= sec < 300:
+        elif 210 <= best_sector <= 300:
             action = 'rotate_left'
-        else:
-            # Khu vực phía sau (150 - 210)
+        else:  # 180
             action = 'backup'
         
         return (action, best_sector, best_clearance)
