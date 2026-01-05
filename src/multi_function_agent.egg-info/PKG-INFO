@@ -6,4 +6,5 @@ Classifier: Programming Language :: Python
 Requires-Python: <3.13,>=3.11
 License-File: LICENSE
 Requires-Dist: nvidia-nat[langchain]
+Requires-Dist: httpx
 Dynamic: license-file

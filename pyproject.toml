@@ -7,6 +7,7 @@ name = "multi_function_agent"
 dynamic = ["version"]
 dependencies = [
   "nvidia-nat[langchain]",
+  "httpx"
 ]
 requires-python = ">=3.11,<3.13"
 description = "Custom NeMo Agent Toolkit Workflow"

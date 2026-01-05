@@ -84,7 +84,7 @@ async def parse_mission_from_prompt(user_prompt: str, builder) -> Mission:
 
         # Load system prompt from file
         from pathlib import Path
-        prompt_file = Path(__file__).parent / "text" / "mission_parser_prompt.txt"
+        prompt_file = Path(__file__).parent.parent / "text" / "mission_parser_prompt.txt"
         
         try:
             with open(prompt_file, 'r') as f:

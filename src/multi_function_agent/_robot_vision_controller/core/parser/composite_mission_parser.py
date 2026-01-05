@@ -1,38 +1,30 @@
 """
 Composite Mission Parser Module
-Parses complex multi-step missions from natural language using LLM.
+Parses complex multi-step missions using direct HTTP to NVIDIA API.
 """
 
 import json
 import logging
+import asyncio
+import httpx
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
-from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Data Structures
+# Data Structures (giữ nguyên)
 @dataclass
 class StepConfig:
     """Configuration for a single mission step."""
     id: str
-    type: str  # explore_area, follow_target, patrol_laps, condition_check, directional_command
+    type: str
     parameters: Dict[str, Any] = field(default_factory=dict)
     success_conditions: List[str] = field(default_factory=list)
     next_step_if_success: Optional[str] = None
     next_step_if_failure: Optional[str] = None
     timeout: Optional[float] = None
     constraints: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class ConditionConfig:
-    """Configuration for conditional branching."""
-    type: str 
-    branch_true: str 
-    branch_false: str  
-    parameters: Dict[str, Any] = field(default_factory=dict) 
-    timeout: float = 30.0  
 
 @dataclass
 class CompositeMissionConfig:
@@ -43,28 +35,18 @@ class CompositeMissionConfig:
     fallback_strategy: Dict[str, str] = field(default_factory=dict)
     global_constraints: Dict[str, Any] = field(default_factory=dict)
 
-# Composite Mission Parser
+# Composite Mission Parser (REWRITTEN)
 class CompositeMissionParser:
-    """
-    Parse complex natural language commands into structured composite missions.
-    
-    Supports:
-    - Multi-step sequences
-    - Conditional branching
-    - Directional commands
-    - Object detection conditions
-    - Timeout handling
-    """
+    """Parse complex natural language commands using direct HTTP."""
     
     def __init__(self):
-        """Initialize parser with LLM."""
-        self.llm = None  # Lazy loaded
+        """Initialize parser."""
+        self.api_key = None
+        self.endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"
         self._system_prompt = self._load_system_prompt()
     
     def _load_system_prompt(self) -> str:
-        """Load comprehensive system prompt for composite mission parsing."""
-        from pathlib import Path
-        
+        """Load system prompt from file."""
         prompt_file = Path(__file__).parent.parent / "text" / "composite_mission_parser_prompt.txt"
         
         try:
@@ -72,36 +54,82 @@ class CompositeMissionParser:
                 return f.read().strip()
         except FileNotFoundError:
             logger.warning(f"Prompt file not found: {prompt_file}, using fallback")
-            # Fallback minimal prompt
             return """You are a robot mission planner. Parse natural language into structured composite missions.
+
+Output JSON with: mission_type, description, steps, fallback_strategy.
+
+CRITICAL: Ignore RTSP/stream setup - focus on robot actions only."""
+    
+    def _initialize_api(self):
+        """Initialize API credentials."""
+        import os
+        self.api_key = os.getenv("NVIDIA_API_KEY")
+        
+        if not self.api_key:
+            raise ValueError("NVIDIA_API_KEY not found in environment")
+        
+        logger.info("[LLM INIT] Using direct HTTP client")
+        logger.info(f"[LLM INIT] Endpoint: {self.endpoint}")
+        logger.info(f"[LLM INIT] API Key: {self.api_key[:20]}...")
+    
+    async def _call_nvidia_api(self, messages: List[Dict]) -> str:
+        """Call NVIDIA API directly using httpx."""
+        if not self.api_key:
+            self._initialize_api()
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": "meta/llama-3.1-70b-instruct",
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 1000
+        }
+        
+        timeout = httpx.Timeout(30.0, connect=10.0)
+        
+        logger.info("[LLM CALL] Sending HTTP request...")
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                self.endpoint,
+                headers=headers,
+                json=payload
+            )
             
-    Output JSON with: mission_type, description, steps (array of step configs), fallback_strategy.
+            response.raise_for_status()
             
-    Step types: explore_area, follow_target, patrol_laps, condition_check, directional_command.
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
             
-    CRITICAL: Ignore RTSP/stream setup - focus on robot actions only."""
+            logger.info(f"[LLM CALL] ✅ Response received: {len(content)} chars")
+            
+            return content
     
     async def parse(self, user_prompt: str, builder) -> CompositeMissionConfig:
-        """
-        Parse natural language into composite mission config.
-        """
+        """Parse natural language into composite mission config."""
         try:
-            # Lazy load LLM
-            if self.llm is None:
-                self.llm = self._initialize_llm(builder)
-            
-            # Build messages
             messages = [
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": f"Parse this mission:\n{user_prompt}"}
             ]
             
-            # Call LLM
             logger.info(f"[COMPOSITE PARSER] Parsing: '{user_prompt}'")
-            response = await self.llm.ainvoke(messages)
-            response_text = response.content.strip()
             
-            # Clean markdown if present
+            # Call API with timeout
+            try:
+                response_text = await asyncio.wait_for(
+                    self._call_nvidia_api(messages),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                logger.error("[COMPOSITE PARSER] Timeout after 30s")
+                raise CompositeParsingError("LLM timeout after 30s")
+            
+            # Clean markdown
             if '```json' in response_text:
                 response_text = response_text.split('```json')[1].split('```')[0].strip()
             elif '```' in response_text:
@@ -110,60 +138,40 @@ class CompositeMissionParser:
             # Parse JSON
             mission_dict = json.loads(response_text)
             
-            # Validate and convert to config
+            # Convert to config
             config = self._dict_to_config(mission_dict)
             
             logger.info(f"[COMPOSITE PARSER] Success: {len(config.steps)} steps")
             return config
             
+        except asyncio.TimeoutError:
+            raise CompositeParsingError("LLM timeout")
         except json.JSONDecodeError as e:
             logger.error(f"[COMPOSITE PARSER] JSON decode failed: {e}")
+            logger.error(f"[COMPOSITE PARSER] Raw response: {response_text[:200]}")
             raise CompositeParsingError(f"Invalid JSON from LLM: {e}")
-        
+        except httpx.HTTPError as e:
+            logger.error(f"[COMPOSITE PARSER] HTTP error: {e}")
+            raise CompositeParsingError(f"HTTP request failed: {e}")
         except Exception as e:
-            logger.error(f"[COMPOSITE PARSER] Parsing failed: {e}")
-            raise CompositeParsingError(f"Failed to parse composite mission: {e}")
-    
-    def _initialize_llm(self, builder):
-        """Initialize LLM from builder config."""
-        try:
-            llm_config = builder._workflow_builder.general_config.llms.get('nim_llm')
-            model_name = llm_config.model_name if llm_config else "meta/llama-3.1-70b-instruct"
-            temperature = llm_config.temperature if llm_config else 0.0
-        except:
-            model_name = "meta/llama-3.1-70b-instruct"
-            temperature = 0.0
-        
-        return ChatNVIDIA(
-            model=model_name,
-            temperature=temperature,
-            max_tokens=1000  # Longer for composite missions
-        )
+            logger.error(f"[COMPOSITE PARSER] Parsing failed: {type(e).__name__}: {e}")
+            raise CompositeParsingError(f"Failed to parse: {e}")
     
     def _dict_to_config(self, mission_dict: Dict) -> CompositeMissionConfig:
-        """
-        Convert parsed JSON dict to CompositeMissionConfig.
-        """
-
-        # THÊM: Filter out invalid step types
+        """Convert parsed JSON dict to CompositeMissionConfig."""
         valid_types = [
             'explore_area', 'follow_target', 'patrol_laps', 
             'condition_check', 'directional_command'
         ]
-
-        # Convert steps
+        
         steps = []
         for step_data in mission_dict.get('steps', []):
             step_type = step_data['type']
-
-            # Skip invalid types với warning
+            
             if step_type not in valid_types:
-                logger.warning(
-                    f"[COMPOSITE PARSER] Skipping invalid step type: {step_type}. "
-                    f"Valid types: {valid_types}"
-                )
+                logger.warning(f"[COMPOSITE PARSER] Skipping invalid step type: {step_type}")
                 continue
-
+            
             step = StepConfig(
                 id=step_data['id'],
                 type=step_data['type'],
@@ -176,7 +184,6 @@ class CompositeMissionParser:
             )
             steps.append(step)
         
-        # Create config
         config = CompositeMissionConfig(
             mission_type=mission_dict.get('mission_type', 'composite_mission'),
             description=mission_dict.get('description', ''),
@@ -185,50 +192,31 @@ class CompositeMissionParser:
             global_constraints=mission_dict.get('global_constraints', {})
         )
         
-        # Validate
         self._validate_config(config)
         
         return config
     
     def _validate_config(self, config: CompositeMissionConfig):
-        """
-        Validate mission config for correctness.
-        """
+        """Validate mission config."""
         if not config.steps:
             raise CompositeParsingError("Mission must have at least one step")
         
-        # Check unique step IDs
         step_ids = [s.id for s in config.steps]
         if len(step_ids) != len(set(step_ids)):
             raise CompositeParsingError("Step IDs must be unique")
         
-        # Check step type validity
         valid_types = [
             'explore_area', 'follow_target', 'patrol_laps', 
             'condition_check', 'directional_command'
         ]
         for step in config.steps:
             if step.type not in valid_types:
-                raise CompositeParsingError(
-                    f"Invalid step type: {step.type}. "
-                    f"Valid types: {valid_types}"
-                )
-        
-        # Check next_step references
-        valid_refs = set(step_ids) | {'mission_complete', None}
-        for step in config.steps:
-            if step.next_step_if_success not in valid_refs:
-                raise CompositeParsingError(
-                    f"Invalid next_step reference: {step.next_step_if_success}"
-                )
+                raise CompositeParsingError(f"Invalid step type: {step.type}")
         
         logger.info("[VALIDATION] Composite mission config valid ✓")
     
     def is_composite_mission(self, user_prompt: str) -> bool:
-        """
-        Quick heuristic check if prompt is composite mission.
-        """
-        # Indicators of composite missions
+        """Quick heuristic check if prompt is composite mission."""
         composite_keywords = [
             'then', 'after', 'if', 'else', 'otherwise',
             'first', 'next', 'finally', 'when',
@@ -237,11 +225,8 @@ class CompositeMissionParser:
         ]
         
         prompt_lower = user_prompt.lower()
-        
-        # Check for multiple indicators
         keyword_count = sum(1 for kw in composite_keywords if kw in prompt_lower)
         
-        # Composite if 2+ keywords OR explicit sequence words
         return (
             keyword_count >= 2 or
             any(seq in prompt_lower for seq in ['then', 'if', 'after that'])

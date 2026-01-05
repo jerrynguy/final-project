@@ -1,1 +1,2 @@
 nvidia-nat[langchain]
+httpx
