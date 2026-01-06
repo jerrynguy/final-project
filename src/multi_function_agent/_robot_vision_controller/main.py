@@ -43,6 +43,11 @@ from multi_function_agent._robot_vision_controller.core.models import (
     preload_robot_vision_model,
     is_yolo_ready,
 )
+from multi_function_agent._robot_vision_controller.core.ace.log_analyzer import (
+    LogBuffer, LogAnalyzer
+)
+from multi_function_agent._robot_vision_controller.core.ace.ace_learner import ACELearner
+from multi_function_agent._robot_vision_controller.core.ace.parameter_manager import ParameterManager
 from multi_function_agent.register import RobotVisionConfig
 
 from aiq.builder.builder import Builder # type: ignore
@@ -203,6 +208,48 @@ async def _robot_vision_controller(
             logger.error(f"❌ Mission parsing failed: {e}")
             yield FunctionInfo.from_fn(lambda x: str(e), description="Parsing failed")
             return
+    
+        # Create ACE components
+        log_buffer = LogBuffer(max_size=200)
+        
+        # Get LLM config from builder (reuse workflow config)
+        try:
+            llm_config = builder._workflow_builder.general_config.llms.get('nim_llm')
+            ace_llm_config = {
+                'model_name': llm_config.model_name if llm_config else "meta/llama-3.1-70b-instruct",
+                'temperature': 0.0,  # ACE needs deterministic output
+                'max_tokens': 1500
+            }
+        except:
+            # Fallback if config not accessible
+            ace_llm_config = {
+                'model_name': "meta/llama-3.1-70b-instruct",
+                'temperature': 0.0,
+                'max_tokens': 1500
+            }
+            logger.warning("[ACE] Using fallback LLM config")
+        
+        ace_learner = ACELearner(llm_config=ace_llm_config)
+        param_manager = ParameterManager()
+        
+        # Load learned parameters from previous missions
+        logger.info("=" * 60)
+        logger.info("[ACE] CHECKING FOR LEARNED PARAMETERS")
+        logger.info("=" * 60)
+        
+        loaded = param_manager.load_from_file()
+        if loaded:
+            logger.info("[ACE] ✅ Applied previous learning")
+        else:
+            logger.info("[ACE] ℹ️  No previous learning found, using defaults")
+        
+        logger.info("=" * 60)
+        
+        # Set mission info in log buffer
+        log_buffer.set_mission_info(
+            mission_type=mission_controller.mission.type,
+            description=mission_controller.mission.description
+        )
         
         # Initialize SLAM for explore mission
         slam_controller = None
@@ -230,6 +277,8 @@ async def _robot_vision_controller(
             slam_controller=slam_controller,
             nav2_ready=nav2_ready,
             max_iterations=None,
+            log_buffer=log_buffer,
+            ace_learner=ace_learner
         )
 
         # Stop SLAM and save map
@@ -580,6 +629,8 @@ async def run_robot_control_loop(
     slam_controller: Optional[SLAMController] = None,
     nav2_ready: bool = False,
     max_iterations: int = None,
+    log_buffer: Optional['LogBuffer'] = None,  
+    ace_learner: Optional['ACELearner'] = None 
 ) -> Dict[str, Any]:
     """Execute main robot control loop."""
     
@@ -896,6 +947,15 @@ async def run_robot_control_loop(
                     spatial_detector=vision_analyzer.spatial_detector,
                     mission_directive=mission_directive  # CHANGED: Removed lidar_override param
                 )
+
+                if log_buffer:
+                    log_buffer.log_iteration(
+                        iteration=iteration,
+                        robot_pos=robot_pos,
+                        vision_analysis=vision_analysis,
+                        navigation_decision=navigation_decision,
+                        abort_info=abort_result if abort_result.get('abort') else None
+                    )
                 
                 PerformanceLogger.log_navigation_decision(navigation_decision)
                 
@@ -933,7 +993,115 @@ async def run_robot_control_loop(
             except:
                 pass
             break
-    
+        
+    # Only run ACE if log_buffer and ace_learner available
+    if log_buffer and ace_learner:
+        logger.info("=" * 60)
+        logger.info("[ACE] STARTING POST-MISSION LEARNING")
+        logger.info("=" * 60)
+        
+        # Generate mission summary
+        mission_summary = log_buffer.get_mission_summary(
+            completion_status=results.get("final_status", "unknown")
+        )
+        
+        logger.info(f"[ACE] Mission summary:")
+        logger.info(f"  - Iterations: {mission_summary.total_iterations}")
+        logger.info(f"  - Aborts: {mission_summary.total_aborts}")
+        logger.info(f"  - Stuck episodes: {mission_summary.stuck_episodes}")
+        
+        # Analyze and learn (async, with error handling)
+        try:
+            logger.info("[ACE] Calling LLM for analysis...")
+            
+            learning_result = await ace_learner.learn_from_mission(
+                mission_summary=mission_summary,
+                auto_apply=False  # Manual review recommended for safety
+            )
+            
+            if learning_result:
+                analysis = learning_result['analysis']
+                valid_recs = learning_result['valid_recommendations']
+                rejected = learning_result['rejected_recommendations']
+                
+                # Display results
+                logger.info("=" * 60)
+                logger.info("[ACE] LEARNING RESULTS")
+                logger.info("=" * 60)
+                
+                logger.info(f"\n📋 DIAGNOSIS:")
+                logger.info(f"  {analysis['diagnosis']}")
+                
+                logger.info(f"\n🔍 ROOT CAUSE:")
+                logger.info(f"  {analysis['root_cause']}")
+                
+                logger.info(f"\n⚠️  SEVERITY: {analysis.get('severity', 'unknown').upper()}")
+                
+                death_pendulum = analysis.get('death_pendulum_detected', False)
+                logger.info(f"\n🚨 DEATH PENDULUM DETECTED: {death_pendulum}")
+                
+                logger.info(f"\n📊 RECOMMENDATIONS: {len(valid_recs)} valid, {len(rejected)} rejected")
+                
+                # Show valid recommendations
+                if valid_recs:
+                    logger.info("\n" + "=" * 60)
+                    logger.info("💡 RECOMMENDED PARAMETER ADJUSTMENTS:")
+                    logger.info("=" * 60)
+                    
+                    for i, rec in enumerate(valid_recs, 1):
+                        logger.info(f"\n{i}. {rec['parameter']}")
+                        logger.info(f"   Current value:  {rec['current_value']:.3f}")
+                        logger.info(f"   Suggested:      {rec['suggested_value']:.3f}")
+                        logger.info(f"   Confidence:     {rec['confidence']:.0%}")
+                        logger.info(f"   Reasoning:")
+                        # Word wrap reasoning
+                        reasoning = rec['reasoning']
+                        import textwrap
+                        wrapped = textwrap.fill(reasoning, width=60, initial_indent='     ', subsequent_indent='     ')
+                        logger.info(wrapped)
+                    
+                    logger.info("\n" + "=" * 60)
+                    logger.info("📝 TO APPLY THESE ADJUSTMENTS:")
+                    logger.info("=" * 60)
+                    logger.info("Option 1 - Review and apply manually:")
+                    logger.info("  python -m multi_function_agent.ace_apply --review")
+                    logger.info("  python -m multi_function_agent.ace_apply --apply")
+                    logger.info("")
+                    logger.info("Option 2 - Auto-apply on next run:")
+                    logger.info("  Parameters are saved to learned_parameters.json")
+                    logger.info("  Will be loaded automatically next time")
+                    logger.info("=" * 60)
+                else:
+                    logger.info("\n✅ No adjustments needed - parameters look good!")
+                
+                # Show rejected if any
+                if rejected:
+                    logger.info("\n⚠️  REJECTED RECOMMENDATIONS:")
+                    for i, rej in enumerate(rejected, 1):
+                        rec = rej['recommendation']
+                        reason = rej['rejection_reason']
+                        logger.info(f"  {i}. {rec['parameter']}: {reason}")
+                
+                # Additional notes
+                if analysis.get('additional_notes'):
+                    logger.info(f"\n💭 ADDITIONAL NOTES:")
+                    logger.info(f"  {analysis['additional_notes']}")
+                
+                logger.info("\n" + "=" * 60)
+                logger.info("[ACE] POST-MISSION LEARNING COMPLETE")
+                logger.info("=" * 60)
+                
+            else:
+                logger.warning("[ACE] ⚠️  Learning failed - no analysis generated")
+        
+        except asyncio.TimeoutError:
+            logger.error("[ACE] ❌ LLM timeout - analysis took too long")
+        
+        except Exception as e:
+            logger.error(f"[ACE] ❌ Learning error: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+
     await stream_handler.stop_stream()
     
     if results["final_status"] == "unknown":

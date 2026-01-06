@@ -13,6 +13,10 @@ src/multi_function_agent/_robot_vision_controller/main.py
 src/multi_function_agent/_robot_vision_controller/test_integration.py
 src/multi_function_agent/_robot_vision_controller/core/models.py
 src/multi_function_agent/_robot_vision_controller/core/query_extractor.py
+src/multi_function_agent/_robot_vision_controller/core/ace/__init__.py
+src/multi_function_agent/_robot_vision_controller/core/ace/ace_learner.py
+src/multi_function_agent/_robot_vision_controller/core/ace/log_analyzer.py
+src/multi_function_agent/_robot_vision_controller/core/ace/parameter_manager.py
 src/multi_function_agent/_robot_vision_controller/core/mission_controller/mission_controller.py
 src/multi_function_agent/_robot_vision_controller/core/mission_controller/mission_validator/mission_validator.py
 src/multi_function_agent/_robot_vision_controller/core/mission_controller/missions/base_mission.py
