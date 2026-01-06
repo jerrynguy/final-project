@@ -32,11 +32,19 @@ nemo-agent-toolkit/
         │           │   ├── query_extractor.py                  # Prompt parameter extraction
         │           │   │
         │           │   ├── text/
-        │           │   │   └── mission_parser_prompt.txt       # Simple mission prompt (3 types)
+        │           │   │   ├── mission_parser_prompt.txt       # Simple mission prompt (3 types)
+        │           │   │   ├── composite_mission_parser_prompt.txt
+        │           │   │   └── ace_analysis_prompt.txt         # ACE system prompt
         │           │   │
         │           │   ├── ros2_node/                          # ROS2 Bridge (Python 3.10 subprocess)
         │           │   │   ├── ros2_node.py                    # Bridge main (Python 3.11 side)
         │           │   │   └── ros2_daemon_script.py           # Daemon (Python 3.10 side)
+        |           |   |
+        │           |   ├── ace/                                # ACE System (NEW)
+        │           |   |   ├── __init__.py
+        │           |   |   ├── log_analyzer.py                 # Log collection & formatting
+        │           |   |   ├── ace_learner.py                  # LLM-based learning
+        │           |   |   └── parameter_manager.py            # Safe parameter management
         │           │   │
         │           │   └── mission_controller/                 # 🎯 Mission System
         │           │       ├── mission_controller.py           # ✏️ Orchestrator
