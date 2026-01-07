@@ -368,6 +368,55 @@ def _mission_directive_to_nav2_goal(
     
     return None
 
+def _validate_nav2_goal(
+    goal_x: float,
+    goal_y: float,
+    current_x: float,
+    current_y: float,
+    slam_controller: Optional[SLAMController]
+) -> Tuple[bool, str]:
+    """
+    Validate Nav2 goal is safe to navigate to.
+    
+    Checks:
+    1. Goal not too close to current position (<0.3m)
+    2. Goal within map bounds (if SLAM map available)
+    3. Goal in free space (if occupancy data available)
+    
+    Returns:
+        (is_valid: bool, reason: str)
+    """
+    import numpy as np
+    
+    # Check 1: Minimum distance from current position
+    distance_from_current = np.sqrt(
+        (goal_x - current_x)**2 + 
+        (goal_y - current_y)**2
+    )
+    
+    if distance_from_current < 0.3:
+        return False, f"Too close to current position ({distance_from_current:.2f}m < 0.3m)"
+    
+    # Check 2: Map bounds (if SLAM available)
+    if slam_controller and slam_controller.is_running:
+        try:
+            from multi_function_agent._robot_vision_controller.core.ros2_node.ros2_node import get_ros2_node
+            ros_node = get_ros2_node()
+            slam_map = ros_node.get_slam_map()
+            
+            if slam_map:
+                is_in_bounds = _check_map_position_free(goal_x, goal_y, slam_map)
+                
+                if not is_in_bounds:
+                    return False, "Outside map bounds or occupied"
+        
+        except Exception as e:
+            logger.debug(f"[NAV2 VALIDATION] Could not check map: {e}")
+            # Don't fail validation if map check fails
+    
+    # All checks passed
+    return True, "Valid"
+
 def _calculate_nav2_escape_goal(
     robot_pos: Dict,
     clearances: Dict,
@@ -375,12 +424,13 @@ def _calculate_nav2_escape_goal(
     stuck_type: str
 ) -> Optional[Dict]:
     """
-    Calculate Nav2 escape goal using CLEARANCE-BASED direction.
+    Calculate Nav2 escape goal with SAFE distance and validation.
     
     Strategy:
-    1. Find direction with MAX clearance (front/left/right/rear)
-    2. Set goal 2.5m away in that direction
-    3. Validate with SLAM map if available
+    1. Find direction with MAX clearance
+    2. Set goal at 60% of clearance (safer than fixed 2.5m)
+    3. Validate goal is in map bounds + free space
+    4. Try alternatives if validation fails
     """
     if robot_pos is None:
         logger.error("[NAV2 GOAL] No robot position")
@@ -392,103 +442,102 @@ def _calculate_nav2_escape_goal(
     
     import numpy as np
     
-    # ✅ FIX: Use clearance-based direction instead of current heading
     # Build direction map with (clearance, angle_offset)
     directions = {
-        'front': (clearances.get('forward', 0), 0.0),          # 0° (straight)
-        'left': (clearances.get('left', 0), np.pi/2),         # 90° (left)
-        'right': (clearances.get('right', 0), -np.pi/2),      # -90° (right)
-        'rear': (clearances.get('rear', 0), np.pi)            # 180° (back)
+        'front': (clearances.get('forward', 0), 0.0),
+        'left': (clearances.get('left', 0), np.pi/2),
+        'right': (clearances.get('right', 0), -np.pi/2),
+        'rear': (clearances.get('rear', 0), np.pi)
     }
     
-    # Choose direction with MAX clearance
-    best_dir_name, (best_clearance, angle_offset) = max(
-        directions.items(), 
-        key=lambda x: x[1][0]
+    # Sort by clearance (descending)
+    sorted_directions = sorted(
+        directions.items(),
+        key=lambda x: x[1][0],
+        reverse=True
     )
     
-    logger.info(
-        f"[NAV2 GOAL] Best escape direction: {best_dir_name} "
-        f"(clearance: {best_clearance:.2f}m)"
-    )
+    logger.info("[NAV2 GOAL] Evaluating directions by clearance:")
+    for dir_name, (clearance, _) in sorted_directions:
+        logger.info(f"  {dir_name}: {clearance:.2f}m")
     
-    # Calculate goal position
-    escape_theta = current_theta + angle_offset
-    
-    # Normalize angle to [-pi, pi]
-    while escape_theta > np.pi:
-        escape_theta -= 2 * np.pi
-    while escape_theta < -np.pi:
-        escape_theta += 2 * np.pi
-    
-    escape_distance = 2.5  # meters
-    goal_x = current_x + escape_distance * np.cos(escape_theta)
-    goal_y = current_y + escape_distance * np.sin(escape_theta)
-    
-    logger.info(
-        f"[NAV2 GOAL] Calculated escape: "
-        f"Current: ({current_x:.2f}, {current_y:.2f}, {np.degrees(current_theta):.0f}°) "
-        f"→ Goal: ({goal_x:.2f}, {goal_y:.2f}, {np.degrees(escape_theta):.0f}°)"
-    )
-    
-    # Strategy 2: Validate with SLAM map if available
-    if slam_controller and slam_controller.is_running:
-        try:
-            from multi_function_agent._robot_vision_controller.core.ros2_node.ros2_node import get_ros2_node
-            ros_node = get_ros2_node()
-            slam_map = ros_node.get_slam_map()
-            
-            if slam_map:
-                # Check if goal position is in free space
-                is_free = _check_map_position_free(
-                    goal_x, goal_y, slam_map
-                )
-                
-                if not is_free:
-                    logger.warning(
-                        f"[NAV2 GOAL] Goal ({goal_x:.2f}, {goal_y:.2f}) "
-                        f"not in free space, trying alternatives..."
-                    )
-                    
-                    # Try other directions in order of clearance
-                    sorted_dirs = sorted(
-                        directions.items(), 
-                        key=lambda x: x[1][0], 
-                        reverse=True
-                    )[1:]  # Skip best (already tried)
-                    
-                    for alt_name, (alt_clear, alt_offset) in sorted_dirs:
-                        alt_theta = current_theta + alt_offset
-                        
-                        # Normalize
-                        while alt_theta > np.pi:
-                            alt_theta -= 2 * np.pi
-                        while alt_theta < -np.pi:
-                            alt_theta += 2 * np.pi
-                        
-                        alt_x = current_x + escape_distance * np.cos(alt_theta)
-                        alt_y = current_y + escape_distance * np.sin(alt_theta)
-                        
-                        if _check_map_position_free(alt_x, alt_y, slam_map):
-                            logger.info(
-                                f"[NAV2 GOAL] Found free alternative: {alt_name} "
-                                f"({alt_x:.2f}, {alt_y:.2f})"
-                            )
-                            goal_x, goal_y, escape_theta = alt_x, alt_y, alt_theta
-                            break
-                    else:
-                        logger.error("[NAV2 GOAL] No free space found in any direction")
-                        return None
+    # ✅ THAY ĐỔI 1: Try each direction until finding valid goal
+    for attempt, (dir_name, (clearance, angle_offset)) in enumerate(sorted_directions, 1):
         
-        except Exception as e:
-            logger.warning(f"[NAV2 GOAL] Could not validate with map: {e}")
+        # Skip directions with insufficient clearance
+        if clearance < 0.5:
+            logger.warning(f"[NAV2 GOAL] Skipping {dir_name}: clearance too low ({clearance:.2f}m)")
+            continue
+        
+        # ✅ THAY ĐỔI 2: Escape distance = 60% of clearance, max 2.0m
+        escape_distance = min(clearance * 0.6, 2.0)
+        
+        logger.info(
+            f"[NAV2 GOAL] Attempt {attempt}: {dir_name} "
+            f"(clearance: {clearance:.2f}m, distance: {escape_distance:.2f}m)"
+        )
+        
+        # Calculate goal position
+        escape_theta = current_theta + angle_offset
+        
+        # Normalize angle to [-pi, pi]
+        while escape_theta > np.pi:
+            escape_theta -= 2 * np.pi
+        while escape_theta < -np.pi:
+            escape_theta += 2 * np.pi
+        
+        goal_x = current_x + escape_distance * np.cos(escape_theta)
+        goal_y = current_y + escape_distance * np.sin(escape_theta)
+        
+        logger.info(
+            f"[NAV2 GOAL]   Candidate: ({goal_x:.2f}, {goal_y:.2f}, {np.degrees(escape_theta):.0f}°)"
+        )
+        
+        # ✅ THAY ĐỔI 3: Validate goal before accepting
+        is_valid, reason = _validate_nav2_goal(
+            goal_x, goal_y, 
+            current_x, current_y,
+            slam_controller
+        )
+        
+        if is_valid:
+            logger.info(f"[NAV2 GOAL] ✅ Valid goal found: {dir_name}")
+            return {
+                'x': goal_x,
+                'y': goal_y,
+                'theta': escape_theta,
+                'direction': dir_name,
+                'distance': escape_distance
+            }
+        else:
+            logger.warning(f"[NAV2 GOAL] ❌ Invalid: {reason}")
     
-    return {
-        'x': goal_x,
-        'y': goal_y,
-        'theta': escape_theta
-    }
-
+    # ✅ THAY ĐỔI 4: All directions failed → try SHORT forward escape
+    logger.error("[NAV2 GOAL] All directions invalid, trying emergency short escape...")
+    
+    # Emergency: 0.8m forward from current position
+    emergency_distance = 0.8
+    goal_x = current_x + emergency_distance * np.cos(current_theta)
+    goal_y = current_y + emergency_distance * np.sin(current_theta)
+    
+    is_valid, _ = _validate_nav2_goal(
+        goal_x, goal_y,
+        current_x, current_y,
+        slam_controller
+    )
+    
+    if is_valid:
+        logger.warning(f"[NAV2 GOAL] ⚠️ Using emergency short escape: ({goal_x:.2f}, {goal_y:.2f})")
+        return {
+            'x': goal_x,
+            'y': goal_y,
+            'theta': current_theta,
+            'direction': 'emergency_forward',
+            'distance': emergency_distance
+        }
+    
+    logger.error("[NAV2 GOAL] ❌ Cannot find any valid escape goal")
+    return None
 
 def _check_map_position_free(
     x: float, 
@@ -497,9 +546,6 @@ def _check_map_position_free(
 ) -> bool:
     """
     Check if position (x, y) is in free space on SLAM map.
-    
-    Note: Currently simplified validation (bounds check only).
-    TODO: Add occupancy grid check when full map data available.
     """
     try:
         # Convert world coordinates to grid coordinates
@@ -515,16 +561,21 @@ def _check_map_position_free(
         height = slam_map.get('height', 0)
         
         if grid_x < 0 or grid_x >= width or grid_y < 0 or grid_y >= height:
-            logger.warning(
-                f"[MAP CHECK] Position out of map bounds: "
-                f"grid=({grid_x},{grid_y}), map=({width}x{height})"
+            logger.debug(
+                f"[MAP CHECK] Out of bounds: "
+                f"world=({x:.2f},{y:.2f}), grid=({grid_x},{grid_y}), map=({width}x{height})"
             )
             return False
         
-        # TODO: Check actual occupancy data when available
-        # For now, assume position is free if within bounds
+        # ✅ THÊM: Add safety margin from edges
+        EDGE_MARGIN = 5  # cells
+        if (grid_x < EDGE_MARGIN or grid_x >= width - EDGE_MARGIN or
+            grid_y < EDGE_MARGIN or grid_y >= height - EDGE_MARGIN):
+            logger.debug(f"[MAP CHECK] Too close to edge: grid=({grid_x},{grid_y})")
+            return False
+        
         logger.debug(
-            f"[MAP CHECK] Position within bounds: "
+            f"[MAP CHECK] ✅ Within bounds: "
             f"world=({x:.2f},{y:.2f}), grid=({grid_x},{grid_y})"
         )
         
@@ -533,7 +584,7 @@ def _check_map_position_free(
     except Exception as e:
         logger.error(f"[MAP CHECK] Error: {e}")
         return False
-    
+
 async def _execute_nav2_rescue(
     robot_interface: 'RobotControllerInterface',
     goal: Dict,

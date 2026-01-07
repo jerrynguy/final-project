@@ -251,13 +251,13 @@ class LidarSafetyMonitor:
         
         # ===== FORWARD MOVEMENT =====
         if action_type == 'forward':
-            # Duration: travel 60% of clearance, max 3s
-            duration = min(3.0, (clearance * 0.6) / 0.20)
+            # ✅ THAY ĐỔI: Tăng từ 60% → 70% clearance, speed từ 0.20 → 0.25
+            duration = min(3.0, (clearance * 0.7) / 0.25)
             
             return {
                 'action': 'escape_forward',
                 'parameters': {
-                    'linear_velocity': 0.20,
+                    'linear_velocity': 0.25,  # ← Tăng từ 0.20
                     'angular_velocity': 0.0,
                     'duration': duration
                 },
@@ -266,14 +266,13 @@ class LidarSafetyMonitor:
         
         # ===== GENTLE TURNS (30° sectors) =====
         elif action_type == 'turn_right':
-            # Turn right while moving forward
-            # Angular: 0.4 rad/s → ~23°/s → 1.3s for 30°
+            # ✅ THAY ĐỔI: Tăng linear speed từ 0.15 → 0.20 (faster escape)
             return {
                 'action': 'escape_turn_right',
                 'parameters': {
-                    'linear_velocity': 0.15,
+                    'linear_velocity': 0.20,  # ← Tăng từ 0.15
                     'angular_velocity': -0.4,
-                    'duration': 2.0
+                    'duration': 2.5  # ← Tăng từ 2.0s
                 },
                 'reason': f'escape_turn_right_{target_sector}deg'
             }
@@ -282,17 +281,16 @@ class LidarSafetyMonitor:
             return {
                 'action': 'escape_turn_left',
                 'parameters': {
-                    'linear_velocity': 0.15,
+                    'linear_velocity': 0.20,  # ← Tăng từ 0.15
                     'angular_velocity': 0.4,
-                    'duration': 2.0
+                    'duration': 2.5  # ← Tăng từ 2.0s
                 },
                 'reason': f'escape_turn_left_{target_sector}deg'
             }
         
         # ===== SHARP ROTATIONS (90-120° sectors) =====
         elif action_type == 'rotate_right':
-            # In-place rotation right
-            # Angular: 0.7 rad/s → ~40°/s → 2.5s for 90°
+            # Giữ nguyên (in-place rotation không cần tăng speed)
             return {
                 'action': 'escape_rotate_right',
                 'parameters': {
@@ -316,14 +314,13 @@ class LidarSafetyMonitor:
         
         # ===== BACKUP (180° sector) =====
         elif action_type == 'backup':
-            # CAREFUL: Only backup with validated clearance
-            # Duration: travel 50% of clearance, max 2s
-            duration = min(2.0, (clearance * 0.5) / 0.15)
+            # ✅ THAY ĐỔI QUAN TRỌNG: Tăng từ 50% → 70% clearance, speed từ 0.15 → 0.20
+            duration = min(3.0, (clearance * 0.7) / 0.20)
             
             return {
                 'action': 'escape_backup',
                 'parameters': {
-                    'linear_velocity': -0.15,
+                    'linear_velocity': -0.20,  # ← Tăng từ -0.15
                     'angular_velocity': 0.0,
                     'duration': duration
                 },
@@ -377,18 +374,15 @@ class LidarSafetyMonitor:
         """
         Select escape direction with NORMALIZED + OPTIMIZED weights.
         
-        ✅ NORMALIZATION: All factors in [0.0-1.0] (Gemini's principle)
-        ✅ WEIGHTS: Balanced for safety + efficiency
-        ✅ SMOOTH: Gradient-based scoring (no cliff effects)
+        ✅ UPDATED WEIGHTS: Ưu tiên forward movement hơn backup
         """
         SAFE_THRESHOLD = 0.30
         
-        # OPTIMAL WEIGHTS (After analysis)
-        # Safety-first but forward-capable
-        W_CLEARANCE = 0.35  # Dominant (safety)
-        W_OBSTACLE  = 0.25  # Secondary (safety)
-        W_OPPOSITE  = 0.20  # Strategic (escape direction)
-        W_FORWARD   = 0.20  # Efficiency (natural motion)
+        # ✅ THAY ĐỔI: Adjust weights để ưu tiên forward/turn hơn backup
+        W_CLEARANCE = 0.35  # Giữ nguyên (dominant - safety)
+        W_OBSTACLE  = 0.25  # Giữ nguyên (secondary - safety)
+        W_OPPOSITE  = 0.15  # ← GIẢM từ 0.20 (ít ưu tiên backup/opposite hơn)
+        W_FORWARD   = 0.25  # ← TĂNG từ 0.20 (ưu tiên tiến về phía trước)
         
         # Filter safe sectors
         safe_sectors = {
@@ -407,40 +401,38 @@ class LidarSafetyMonitor:
         scored_sectors = []
         
         for sector, clearance in safe_sectors.items():
-            # Factor 1: Clearance Score [0.0-1.0] ✓ NORMALIZED
+            # Factor 1: Clearance Score [0.0-1.0]
             clearance_score = min(clearance / 3.5, 1.0)
             
-            # Factor 2: Obstacle Avoidance [0.0-1.0] ✓ NORMALIZED
+            # Factor 2: Obstacle Avoidance [0.0-1.0]
             angle_diff = min(
                 abs(sector - normalized_obstacle),
                 360 - abs(sector - normalized_obstacle)
             )
             obstacle_avoidance_score = angle_diff / 180.0
 
-            # Factor 3: Opposite Bonus [0.0-1.0] ✓ NORMALIZED + SMOOTH
+            # Factor 3: Opposite Bonus [0.0-1.0] - SMOOTH GRADIENT
             angle_to_opposite = min(
                 abs(sector - opposite_angle),
                 360 - abs(sector - opposite_angle)
             )
-            
-            # SMOOTH GRADIENT (not binary):
             opposite_bonus = max(0.0, 1.0 - angle_to_opposite / 180.0)
             
-            # Factor 4: Forward Bias [0.0-1.0] ✓ NORMALIZED
+            # Factor 4: Forward Bias [0.0-1.0]
             if sector == 0:
                 forward_bias_score = 1.00  # Perfect forward
             elif sector in [330, 30]:
-                forward_bias_score = 0.85  # Slight turn
+                forward_bias_score = 0.90  # ← TĂNG từ 0.85 (encourage slight turns)
             elif sector in [300, 60]:
-                forward_bias_score = 0.60  # Moderate turn
+                forward_bias_score = 0.70  # ← TĂNG từ 0.60 (moderate turns acceptable)
             elif sector in [270, 90]:
-                forward_bias_score = 0.40  # Side movement
+                forward_bias_score = 0.45  # ← TĂNG từ 0.40 (side movement less bad)
             elif sector in [240, 120]:
-                forward_bias_score = 0.20  # Rear-side
+                forward_bias_score = 0.25  # ← TĂNG từ 0.20 (rear-side still possible)
             else:  # 150, 180, 210
-                forward_bias_score = 0.00  # Backward (worst)
+                forward_bias_score = 0.05  # ← TĂNG từ 0.00 (backup as last resort, not impossible)
             
-            # WEIGHTED TOTAL ✓ ALL NORMALIZED
+            # ✅ WEIGHTED TOTAL với updated weights
             total_score = (
                 clearance_score * W_CLEARANCE +
                 obstacle_avoidance_score * W_OBSTACLE +
@@ -468,7 +460,7 @@ class LidarSafetyMonitor:
             f"(clearance: {best_clearance:.2f}m, score: {best_score:.3f})"
         )
         
-        # Map to action
+        # Map to action (giữ nguyên)
         if best_sector == 0:
             action = 'forward'
         elif best_sector == 30:
@@ -483,6 +475,7 @@ class LidarSafetyMonitor:
             action = 'backup'
         
         return (action, best_sector, best_clearance)
+
 
     def _force_escape_response(
         self,
@@ -709,6 +702,14 @@ class LidarSafetyMonitor:
         self.escape_start_time = 0.0
         self.abort_count = 0
         
+        # ✅ THÊM: Clear escape tracking variables
+        if hasattr(self, '_escape_start_distance'):
+            delattr(self, '_escape_start_distance')
+        if hasattr(self, '_rotate_attempted'):
+            delattr(self, '_rotate_attempted')
+        if hasattr(self, '_alternative_attempted'):
+            delattr(self, '_alternative_attempted')
+        
         logger.info("[RESET] Safety monitor reset after Nav2 rescue")
 
     def check_critical_abort(
@@ -718,9 +719,6 @@ class LidarSafetyMonitor:
     ) -> Dict:
         """
         Main safety check với state machine.
-        
-        Returns:
-            Dict with keys: abort, command, min_distance, state
         """
         if lidar_data is None:
             logger.error("[CRITICAL] No LIDAR data - ABORT")
@@ -742,15 +740,25 @@ class LidarSafetyMonitor:
             if self.state == SafetyState.ESCAPE_WAIT:
                 elapsed = current_time - self.escape_start_time
                 
-                # CHECK SUCCESS FREQUENTLY (every call, not just timeout)
-                if min_distance > self.thresholds.RESUME_SAFE:  # 0.5m
+                # ✅ THAY ĐỔI 1: Check success FREQUENTLY (every call, not just timeout)
+                # Track escape start distance for improvement calculation
+                if not hasattr(self, '_escape_start_distance'):
+                    self._escape_start_distance = min_distance
+                
+                # SUCCESS CHECK: Distance improved significantly (>20% increase OR >0.5m)
+                distance_improvement = min_distance - self._escape_start_distance
+                improvement_ratio = distance_improvement / max(self._escape_start_distance, 0.1)
+                
+                if min_distance > self.thresholds.RESUME_SAFE:  # >0.5m
                     logger.info(
                         f"[ESCAPE SUCCESS] ✓ Cleared to {min_distance:.2f}m "
-                        f"after {elapsed:.1f}s → NORMAL"
+                        f"after {elapsed:.1f}s (improved +{distance_improvement:.2f}m) → NORMAL"
                     )
                     self.state = SafetyState.NORMAL
                     
-                    # Reset rotate attempt flag
+                    # ✅ CLEANUP: Reset tracking variables
+                    if hasattr(self, '_escape_start_distance'):
+                        delattr(self, '_escape_start_distance')
                     if hasattr(self, '_rotate_attempted'):
                         self._rotate_attempted = False
                     
@@ -761,21 +769,71 @@ class LidarSafetyMonitor:
                         'state': 'normal'
                     }
                 
-                # TIMEOUT HANDLING (keep 6s, check every iteration)
+                # ✅ THAY ĐỔI 2: EARLY FAILURE DETECTION (after 2s, no improvement)
+                if elapsed > 2.0 and improvement_ratio < 0.1:  # <10% improvement after 2s
+                    logger.warning(
+                        f"[ESCAPE STALL] ⚠️ No improvement after {elapsed:.1f}s "
+                        f"(distance: {self._escape_start_distance:.2f}m → {min_distance:.2f}m, "
+                        f"improvement: {improvement_ratio:.1%})"
+                    )
+                    
+                    # ✅ FALLBACK 1: Try alternative direction if available
+                    if not hasattr(self, '_alternative_attempted'):
+                        logger.warning("[ESCAPE STALL] Trying alternative direction...")
+                        
+                        sector_clearances = self._analyze_360_clearances(obstacles)
+                        
+                        # Get second-best direction (skip already-tried direction)
+                        sorted_sectors = sorted(
+                            sector_clearances.items(),
+                            key=lambda x: x[1],
+                            reverse=True
+                        )
+                        
+                        # Try second best if clearance >0.4m
+                        if len(sorted_sectors) >= 2 and sorted_sectors[1][1] > 0.4:
+                            alt_sector, alt_clearance = sorted_sectors[1]
+                            
+                            logger.warning(
+                                f"[ESCAPE STALL] Alternative: {alt_sector}° "
+                                f"(clearance: {alt_clearance:.2f}m)"
+                            )
+                            
+                            self._alternative_attempted = True
+                            self.escape_start_time = current_time  # Reset timer
+                            self._escape_start_distance = min_distance  # Reset baseline
+                            
+                            # Generate command for alternative direction
+                            action_type, target_sector, clearance = self._select_escape_direction(
+                                sector_clearances,
+                                0.0,  # Don't use robot heading
+                                obstacles[0][0] if obstacles else 0.0
+                            )
+                            
+                            return {
+                                'abort': True,
+                                'command': self._generate_escape_command(
+                                    action_type, target_sector, clearance
+                                ),
+                                'min_distance': min_distance,
+                                'state': 'escape_alternative',
+                                'clearances': sector_clearances
+                            }
+                
+                # TIMEOUT HANDLING (6s passed, still not clear)
                 if elapsed > self.escape_duration:
                     logger.error(
                         f"[ESCAPE TIMEOUT] ✗ Failed after {elapsed:.1f}s "
-                        f"(still at {min_distance:.2f}m)"
+                        f"(still at {min_distance:.2f}m, started at {self._escape_start_distance:.2f}m)"
                     )
                     
                     # Analyze current situation
-                    obstacles = self._get_obstacles_with_angles(lidar_data)
                     sector_clearances = self._analyze_360_clearances(obstacles)
                     
                     max_sector = max(sector_clearances, key=sector_clearances.get)
                     max_clearance = sector_clearances[max_sector]
                     
-                    # ✅ TRY 1: Rotate in-place rescue (if not attempted yet)
+                    # ✅ FALLBACK 2: Rotate rescue (if not attempted yet AND clearance >0.2m)
                     if max_clearance > 0.20 and not hasattr(self, '_rotate_attempted'):
                         logger.warning(
                             f"[TIMEOUT RESCUE] Attempting rotate toward {max_sector}° "
@@ -809,7 +867,7 @@ class LidarSafetyMonitor:
                             'clearances': sector_clearances
                         }
                     
-                    # ✅ TRY 2: Nav2 rescue (if rotate attempted OR no clearance)
+                    # ✅ FALLBACK 3: Nav2 rescue (all local attempts failed)
                     logger.error(
                         f"[TIMEOUT] Cannot escape locally "
                         f"(max clearance: {max_clearance:.2f}m at {max_sector}°)"
@@ -818,7 +876,12 @@ class LidarSafetyMonitor:
                     
                     # Reset flags and state
                     if hasattr(self, '_rotate_attempted'):
-                        self._rotate_attempted = False
+                        delattr(self, '_rotate_attempted')
+                    if hasattr(self, '_alternative_attempted'):
+                        delattr(self, '_alternative_attempted')
+                    if hasattr(self, '_escape_start_distance'):
+                        delattr(self, '_escape_start_distance')
+                    
                     self.state = SafetyState.NORMAL
                     
                     return {
@@ -833,7 +896,8 @@ class LidarSafetyMonitor:
                 # ✅ Still escaping - pause commands
                 logger.debug(
                     f"[ESCAPING] {elapsed:.1f}s/{self.escape_duration:.1f}s, "
-                    f"dist={min_distance:.2f}m"
+                    f"dist={min_distance:.2f}m (started: {self._escape_start_distance:.2f}m, "
+                    f"improvement: {improvement_ratio:.1%})"
                 )
                 return {
                     'abort': False,
@@ -861,6 +925,9 @@ class LidarSafetyMonitor:
                     f"[ABORT #{self.abort_count}] Obstacle at {angle:.1f}° "
                     f"({distance:.3f}m) → RECOVERY"
                 )
+                
+                # ✅ TRACK: Record starting distance for escape validation
+                self._escape_start_distance = distance
                 
                 # Generate recovery command using 360° analysis
                 recovery_cmd = self._force_escape_response(obstacles, robot_pos)
