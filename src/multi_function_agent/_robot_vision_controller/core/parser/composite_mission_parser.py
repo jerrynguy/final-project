@@ -89,7 +89,7 @@ CRITICAL: Ignore RTSP/stream setup - focus on robot actions only."""
             "max_tokens": 1000
         }
         
-        timeout = httpx.Timeout(30.0, connect=10.0)
+        timeout = httpx.Timeout(130.0, connect=10.0)
         
         logger.info("[LLM CALL] Sending HTTP request...")
         
@@ -123,7 +123,7 @@ CRITICAL: Ignore RTSP/stream setup - focus on robot actions only."""
             try:
                 response_text = await asyncio.wait_for(
                     self._call_nvidia_api(messages),
-                    timeout=30.0
+                    timeout=130.0
                 )
             except asyncio.TimeoutError:
                 logger.error("[COMPOSITE PARSER] Timeout after 30s")

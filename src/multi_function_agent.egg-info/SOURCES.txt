@@ -1,5 +1,4 @@
 LICENSE
-README.md
 pyproject.toml
 src/multi_function_agent/__init__.py
 src/multi_function_agent/register.py
