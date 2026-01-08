@@ -59,7 +59,7 @@ class ParameterManager:
         """
         if learned_params_file is None:
             # Default: src/multi_function_agent/configs/learned_parameters.json
-            base_dir = Path(__file__).parent.parent.parent
+            base_dir = Path(__file__).parent.parent.parent.parent
             learned_params_file = str(base_dir / "configs" / "learned_parameters.json")
         
         self.learned_params_file = Path(learned_params_file)

@@ -454,6 +454,32 @@ async def run_robot_control_loop(
                     )
                     logger.error("Mission will abort - manual intervention may be needed")
                     
+                    if nav2_ready and robot_pos:
+                        # Generate random goal to escape deadlock
+                        import random, numpy as np
+                        escape_distance = 2.0
+                        escape_angle = random.uniform(-np.pi, np.pi)
+                        
+                        goal_x = robot_pos['x'] + escape_distance * np.cos(escape_angle)
+                        goal_y = robot_pos['y'] + escape_distance * np.sin(escape_angle)
+                        
+                        logger.warning(
+                            f"[NAV2 RESCUE] Sending goal: ({goal_x:.2f}, {goal_y:.2f})"
+                        )
+                        
+                        nav2_success = await robot_interface.send_nav2_goal(
+                            x=goal_x,
+                            y=goal_y,
+                            theta=escape_angle
+                        )
+                        
+                        if nav2_success:
+                            logger.info("[NAV2 RESCUE] Goal accepted, continuing...")
+                            await asyncio.sleep(0.1)
+                            continue  # ← KHÔNG BREAK, tiếp tục mission
+                    
+                    # ✅ OPTION B: Nếu Nav2 không available, CHỈ KHI ĐÓ mới break
+                    logger.error("[DEADLOCK] Nav2 not available, aborting mission")
                     results["final_status"] = "deadlock_cannot_escape"
                     break
 

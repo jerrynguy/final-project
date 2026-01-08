@@ -45,7 +45,7 @@ class LidarSafetyMonitor:
         
         # Escape tracking
         self.escape_start_time = 0.0
-        self.escape_duration = 3.0  # 3 seconds escape window
+        self.escape_duration = 8.0  # 8 seconds escape window
         
         # Stuck detection
         self.last_abort_position = None
@@ -298,6 +298,18 @@ class LidarSafetyMonitor:
                     'duration': 2.4  # ⬆️ Was 2.0 (+20%)
                 },
                 'reason': f'escape_rotate_right_{target_sector}deg'
+            }
+        
+        elif action_type == 'rotate_left':
+            return {
+                'action': 'escape_rotate_left',
+                'parameters': {
+                    'linear_velocity': 0.0,
+                    'angular_velocity': 0.7,  # ← Rotate LEFT (positive)
+                    'duration': 2.4  # ← +20% duration
+                },
+                'confidence': 0.9,
+                'reason': f'escape_rotate_left_{target_sector}deg'
             }
 
         elif action_type == 'backup':
@@ -586,7 +598,7 @@ class LidarSafetyMonitor:
             # Transition to ESCAPE_WAIT state
             self.state = SafetyState.ESCAPE_WAIT
             self.escape_start_time = time.time()
-            self.escape_duration = 6.0  # Full 6s for escape
+            self.escape_duration = 10.0  # Full 10s for escape
             
             # Generate movement command
             escape_cmd = self._generate_escape_command(
