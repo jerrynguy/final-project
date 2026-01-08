@@ -377,12 +377,13 @@ class LidarSafetyMonitor:
         ✅ UPDATED WEIGHTS: Ưu tiên forward movement hơn backup
         """
         SAFE_THRESHOLD = 0.30
+        OBSTACLE_REJECTION_ARC = 60  # ← NEW: Reject sectors within ±60° of obstacle
         
         # ✅ THAY ĐỔI: Adjust weights để ưu tiên forward/turn hơn backup
-        W_CLEARANCE = 0.35  # Giữ nguyên (dominant - safety)
+        W_CLEARANCE = 0.40  # Giữ nguyên (dominant - safety)
         W_OBSTACLE  = 0.25  # Giữ nguyên (secondary - safety)
-        W_OPPOSITE  = 0.15  # ← GIẢM từ 0.20 (ít ưu tiên backup/opposite hơn)
-        W_FORWARD   = 0.25  # ← TĂNG từ 0.20 (ưu tiên tiến về phía trước)
+        W_OPPOSITE  = 0.20 
+        W_FORWARD   = 0.15  
         
         # Filter safe sectors
         safe_sectors = {
@@ -398,9 +399,68 @@ class LidarSafetyMonitor:
         normalized_obstacle = obstacle_angle_deg % 360
         opposite_angle = (normalized_obstacle + 180) % 360
         
-        scored_sectors = []
+        # Filter out sectors that point TOWARD obstacle
+        filtered_sectors = {}
+        rejected_sectors = []
         
         for sector, clearance in safe_sectors.items():
+            # Calculate angular distance to obstacle
+            angle_to_obstacle = min(
+                abs(sector - normalized_obstacle),
+                360 - abs(sector - normalized_obstacle)
+            )
+            
+            # Reject if within danger arc of obstacle direction
+            if angle_to_obstacle < OBSTACLE_REJECTION_ARC:
+                rejected_sectors.append((sector, angle_to_obstacle))
+                logger.debug(
+                    f"[ESCAPE FILTER] Rejected sector {sector}° "
+                    f"(too close to obstacle at {normalized_obstacle:.0f}°, "
+                    f"angle_diff={angle_to_obstacle:.0f}°)"
+                )
+                continue
+            
+            filtered_sectors[sector] = clearance
+
+        # Log filtering results
+        if rejected_sectors:
+            logger.warning(
+                f"[ESCAPE FILTER] Rejected {len(rejected_sectors)} sectors "
+                f"pointing toward obstacle at {normalized_obstacle:.0f}°:"
+            )
+            for sector, angle_diff in rejected_sectors[:3]:  # Show first 3
+                logger.warning(f"  • {sector}° (angle_diff={angle_diff:.0f}°)")
+
+        # Check if all sectors were rejected
+        if not filtered_sectors:
+            logger.error(
+                f"[ESCAPE FILTER] ⚠️  ALL safe sectors rejected! "
+                f"Obstacle at {normalized_obstacle:.0f}°"
+            )
+            logger.error(
+                f"[ESCAPE FILTER] Emergency fallback: using opposite direction"
+            )
+            
+            # Try opposite direction even if it was rejected
+            opposite_sector = int(opposite_angle // 30) * 30
+            if opposite_sector in safe_sectors:
+                filtered_sectors = {opposite_sector: safe_sectors[opposite_sector]}
+                logger.warning(
+                    f"[ESCAPE FILTER] Using opposite sector {opposite_sector}° "
+                    f"(clearance: {safe_sectors[opposite_sector]:.2f}m)"
+                )
+            else:
+                # Last resort: use best clearance regardless of direction
+                best_safe = max(safe_sectors.items(), key=lambda x: x[1])
+                filtered_sectors = {best_safe[0]: best_safe[1]}
+                logger.error(
+                    f"[ESCAPE FILTER] ⚠️  Last resort: using sector {best_safe[0]}° "
+                    f"(best clearance: {best_safe[1]:.2f}m, may point toward obstacle!)"
+                )
+
+        scored_sectors = []
+        
+        for sector, clearance in filtered_sectors.items():
             # Factor 1: Clearance Score [0.0-1.0]
             clearance_score = min(clearance / 3.5, 1.0)
             
@@ -664,14 +724,12 @@ class LidarSafetyMonitor:
         self.state = SafetyState.NORMAL
         logger.info("[STATS RESET] Safety monitor cleared")
 
-    def should_trigger_nav2_rescue(self) -> bool:
+    def should_abort_mission(self) -> bool:
         """
-        Check nếu nên trigger Nav2 rescue.
-        
-        Điều kiện: Force escape thất bại (vẫn ở ESCAPE_WAIT sau >5s)
+        Check if mission should abort due to prolonged stuck.
         
         Returns:
-            True nếu cần Nav2 rescue, False nếu không
+            True if stuck for >10s in ESCAPE_WAIT, False otherwise
         """
         if self.state != SafetyState.ESCAPE_WAIT:
             return False
@@ -679,38 +737,15 @@ class LidarSafetyMonitor:
         current_time = time.time()
         elapsed = current_time - self.escape_start_time
         
-        # Force escape thất bại nếu:
-        # 1. Đã >5s trong ESCAPE_WAIT
-        # 2. Consecutive aborts >= 3 (đã trigger force escape)
-        if elapsed > 5.0 and self.consecutive_aborts_at_same_spot >= 3:
+        # Abort mission if stuck in escape for too long
+        if elapsed > 10.0:
             logger.error(
-                f"[FORCE ESCAPE FAILED] Still in ESCAPE_WAIT after {elapsed:.1f}s "
-                f"(consecutive aborts: {self.consecutive_aborts_at_same_spot}) "
-                f"→ Nav2 rescue needed"
+                f"[MISSION ABORT] Stuck in ESCAPE_WAIT for {elapsed:.1f}s "
+                f"without improvement. Cannot escape locally."
             )
             return True
         
         return False
-
-    def reset_after_nav2_rescue(self):
-        """
-        Reset state sau khi Nav2 rescue thành công.
-        """
-        self.state = SafetyState.NORMAL
-        self.consecutive_aborts_at_same_spot = 0
-        self.last_abort_position = None
-        self.escape_start_time = 0.0
-        self.abort_count = 0
-        
-        # ✅ THÊM: Clear escape tracking variables
-        if hasattr(self, '_escape_start_distance'):
-            delattr(self, '_escape_start_distance')
-        if hasattr(self, '_rotate_attempted'):
-            delattr(self, '_rotate_attempted')
-        if hasattr(self, '_alternative_attempted'):
-            delattr(self, '_alternative_attempted')
-        
-        logger.info("[RESET] Safety monitor reset after Nav2 rescue")
 
     def check_critical_abort(
         self,

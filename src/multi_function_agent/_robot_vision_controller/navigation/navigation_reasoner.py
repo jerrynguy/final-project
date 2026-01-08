@@ -77,17 +77,17 @@ class NavigationReasoner:
         Xác định zone an toàn dựa trên clearances tổng hợp.
         
         Zones:
-        - Zone 3 (FAR): Front > 0.7m VÀ (Left > 0.5m OR Right > 0.5m)
-        - Zone 2 (MEDIUM): Front 0.3-0.7m HOẶC bị kẹp 2 bên
-        - Zone 1 (CRITICAL): Front < 0.3m
+        - Zone 3 (FAR): Front > 0.8m VÀ (Left > 0.5m OR Right > 0.5m)
+        - Zone 2 (MEDIUM): Front 0.4-0.8m HOẶC bị kẹp 2 bên
+        - Zone 1 (CRITICAL): Front < 0.4m
         """
         
-        # RULE 1: Front < 0.3m → CRITICAL (không phụ thuộc sides)
-        if front_clear < 0.3:
+        # RULE 1: Front < 0.4m → CRITICAL (tăng từ 0.3m)
+        if front_clear < 0.4:
             return 1
         
-        # RULE 2: Front < 0.7m → MEDIUM (không kể sides)
-        if front_clear < 0.7:
+        # RULE 2: Front < 0.8m → MEDIUM (tăng từ 0.7m)
+        if front_clear < 0.8:
             return 2
         
         # RULE 3: Front OK nhưng bị kẹp 2 bên → MEDIUM
@@ -651,7 +651,17 @@ class NavigationReasoner:
         right_clear = clearances.get('right', 999)
         
         boosted_speed = self.base_speed * self.exploration_boost
+
+        # Detect tight space condition
+        min_clearance = min(front_clear, left_clear, right_clear)
+        is_tight_space = min_clearance < 1.0  # Any side < 1.0m = tight
         
+        if is_tight_space:
+            logger.info(
+                f"[TIGHT SPACE] Min clearance {min_clearance:.2f}m < 1.0m "
+                f"→ Disabling frontier guidance"
+            )
+
         # Determine navigation zone
         zone = self._get_navigation_zone(
             front_clear=clearances.get('forward', 999),
@@ -702,9 +712,17 @@ class NavigationReasoner:
             else:
                 direction, angular = self._decide_avoidance_direction(clearances)
                 
-                logger.info(
-                    f"[ZONE 3 - CLEARANCE] Steer {direction} (angular: {angular:.2f})"
-                )
+                # Log reason for not using frontier
+                if is_tight_space:
+                    logger.info(
+                        f"[ZONE 3 - CLEARANCE] Tight space - using clearance-based "
+                        f"steering {direction} (angular: {angular:.2f})"
+                    )
+                else:
+                    logger.info(
+                        f"[ZONE 3 - CLEARANCE] No valid frontier - steering {direction} "
+                        f"(angular: {angular:.2f})"
+                    )
             
             return {
                 'action': 'explore_forward',
