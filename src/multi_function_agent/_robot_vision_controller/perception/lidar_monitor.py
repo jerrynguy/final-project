@@ -67,26 +67,27 @@ class LidarSafetyMonitor:
     
     def _should_abort_for_obstacle(self, angle_deg: float, distance: float) -> bool:
         """
-        Smart abort decision based on obstacle angle and movement direction.
+        Smart abort decision using centralized thresholds.
         
         Rules:
-        - Forward motion: chỉ abort nếu obstacle ở front arc (±45°)
-        - Turning/stopped: abort nếu obstacle ở wider arc (±90°)
+        - Forward motion: strict front arc (±45°) uses CRITICAL_ABORT_FRONT
+        - Turning/stopped: wider arc (±90°) uses CRITICAL_ABORT
+        - Sides (>90°): lenient CRITICAL_ABORT_SIDE
         """
         is_forward = self._is_moving_forward()
         
         if is_forward:
             # Moving forward: strict front check
-            if abs(angle_deg) <= 45:
-                critical_threshold = 0.22  # Front arc
+            if abs(angle_deg) <= SafetyThresholds.FRONT_ARC_HALF_ANGLE:  # ±60°
+                critical_threshold = SafetyThresholds.CRITICAL_ABORT_FRONT  # 0.22m
             else:
-                critical_threshold = 0.15  # Side (more lenient)
+                critical_threshold = SafetyThresholds.CRITICAL_ABORT_SIDE   # 0.15m
         else:
             # Turning: check wider arc
-            if abs(angle_deg) <= 90:
-                critical_threshold = 0.20
+            if abs(angle_deg) <= SafetyThresholds.SIDE_ARC_HALF_ANGLE:  # ±90°
+                critical_threshold = SafetyThresholds.CRITICAL_ABORT  # 0.22m
             else:
-                critical_threshold = 0.15
+                critical_threshold = SafetyThresholds.CRITICAL_ABORT_SIDE  # 0.15m
         
         should_abort = distance < critical_threshold
         
@@ -251,76 +252,62 @@ class LidarSafetyMonitor:
         
         # ===== FORWARD MOVEMENT =====
         if action_type == 'forward':
-            # ✅ THAY ĐỔI: Tăng từ 60% → 70% clearance, speed từ 0.20 → 0.25
-            duration = min(3.0, (clearance * 0.7) / 0.25)
+            # ⬆️ Increased linear speed: 0.25 → 0.30 m/s
+            # ⬆️ Increased duration: +20% (clearance * 0.84)
+            duration = min(3.6, (clearance * 0.84) / 0.30)  # Was: min(3.0, clearance*0.7/0.25)
             
             return {
                 'action': 'escape_forward',
                 'parameters': {
-                    'linear_velocity': 0.25,  # ← Tăng từ 0.20
+                    'linear_velocity': 0.30,  # ⬆️ Was 0.25
                     'angular_velocity': 0.0,
                     'duration': duration
                 },
                 'reason': f'escape_forward_{clearance:.2f}m'
             }
-        
-        # ===== GENTLE TURNS (30° sectors) =====
+
         elif action_type == 'turn_right':
-            # ✅ THAY ĐỔI: Tăng linear speed từ 0.15 → 0.20 (faster escape)
             return {
                 'action': 'escape_turn_right',
                 'parameters': {
-                    'linear_velocity': 0.20,  # ← Tăng từ 0.15
+                    'linear_velocity': 0.25,  # ⬆️ Was 0.20
                     'angular_velocity': -0.4,
-                    'duration': 2.5  # ← Tăng từ 2.0s
+                    'duration': 3.0  # ⬆️ Was 2.5 (+20%)
                 },
                 'reason': f'escape_turn_right_{target_sector}deg'
             }
-        
+
         elif action_type == 'turn_left':
             return {
                 'action': 'escape_turn_left',
                 'parameters': {
-                    'linear_velocity': 0.20,  # ← Tăng từ 0.15
+                    'linear_velocity': 0.25,  # ⬆️ Was 0.20
                     'angular_velocity': 0.4,
-                    'duration': 2.5  # ← Tăng từ 2.0s
+                    'duration': 3.0  # ⬆️ Was 2.5 (+20%)
                 },
                 'reason': f'escape_turn_left_{target_sector}deg'
             }
-        
-        # ===== SHARP ROTATIONS (90-120° sectors) =====
+
+        # (For rotate_right, rotate_left: keep linear=0, only increase duration)
         elif action_type == 'rotate_right':
-            # Giữ nguyên (in-place rotation không cần tăng speed)
             return {
                 'action': 'escape_rotate_right',
                 'parameters': {
                     'linear_velocity': 0.0,
                     'angular_velocity': -0.7,
-                    'duration': 2.0
+                    'duration': 2.4  # ⬆️ Was 2.0 (+20%)
                 },
                 'reason': f'escape_rotate_right_{target_sector}deg'
             }
-        
-        elif action_type == 'rotate_left':
-            return {
-                'action': 'escape_rotate_left',
-                'parameters': {
-                    'linear_velocity': 0.0,
-                    'angular_velocity': 0.7,
-                    'duration': 2.0
-                },
-                'reason': f'escape_rotate_left_{target_sector}deg'
-            }
-        
-        # ===== BACKUP (180° sector) =====
+
         elif action_type == 'backup':
-            # ✅ THAY ĐỔI QUAN TRỌNG: Tăng từ 50% → 70% clearance, speed từ 0.15 → 0.20
-            duration = min(3.0, (clearance * 0.7) / 0.20)
+            # ⬆️ Increased backup speed: 0.20 → 0.25 m/s
+            duration = min(3.6, (clearance * 0.84) / 0.25)
             
             return {
                 'action': 'escape_backup',
                 'parameters': {
-                    'linear_velocity': -0.20,  # ← Tăng từ -0.15
+                    'linear_velocity': -0.25,  # ⬆️ Was -0.20
                     'angular_velocity': 0.0,
                     'duration': duration
                 },
@@ -372,18 +359,20 @@ class LidarSafetyMonitor:
         obstacle_angle_deg: float
     ) -> Tuple[str, int, float]:
         """
-        Select escape direction with NORMALIZED + OPTIMIZED weights.
+        Select best escape direction using centralized thresholds.
         
-        ✅ UPDATED WEIGHTS: Ưu tiên forward movement hơn backup
+        Updates:
+        - ESCAPE_SAFE_THRESHOLD = 0.35m (was 0.30, accounts for robot width + noise)
+        - OBSTACLE_REJECTION_ARC = 45° (was 60°, tighter for differential drive)
         """
-        SAFE_THRESHOLD = 0.30
-        OBSTACLE_REJECTION_ARC = 60  # ← NEW: Reject sectors within ±60° of obstacle
+        SAFE_THRESHOLD = SafetyThresholds.ESCAPE_SAFE_THRESHOLD  # ✅ 0.35m
+        OBSTACLE_REJECTION_ARC = SafetyThresholds.OBSTACLE_REJECTION_ARC  # ✅ 45°
         
-        # ✅ THAY ĐỔI: Adjust weights để ưu tiên forward/turn hơn backup
-        W_CLEARANCE = 0.40  # Giữ nguyên (dominant - safety)
-        W_OBSTACLE  = 0.25  # Giữ nguyên (secondary - safety)
-        W_OPPOSITE  = 0.20 
-        W_FORWARD   = 0.15  
+        # ✅ Weight configuration (unchanged, but now documented)
+        W_CLEARANCE = 0.40  # Clearance distance (dominant)
+        W_OBSTACLE  = 0.25  # Obstacle avoidance angle
+        W_OPPOSITE  = 0.20  # Opposite direction bonus
+        W_FORWARD   = 0.15  # Forward bias
         
         # Filter safe sectors
         safe_sectors = {

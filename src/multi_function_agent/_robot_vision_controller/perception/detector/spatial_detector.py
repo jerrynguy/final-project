@@ -39,9 +39,6 @@ class SpatialDetector:
     """
     
     def __init__(self, frame_width: int = 640, frame_height: int = 480):
-        """
-        Initialize spatial detector.
-        """
         self.frame_width = frame_width
         self.frame_height = frame_height
         
@@ -52,12 +49,13 @@ class SpatialDetector:
         self._frame_counter = 0
         self._last_result = None
 
+        # ✅ Use centralized thresholds
         self.thresholds = SafetyThresholds
         
-        # LiDAR configuration
+        # ✅ LiDAR configuration (from thresholds)
         self.use_lidar = True
-        self.lidar_max_range = 3.5
-        self.lidar_min_range = self.thresholds.HARDWARE_LIMIT  # 0.12m
+        self.lidar_max_range = 3.5  # OK to keep (hardware spec)
+        self.lidar_min_range = self.thresholds.HARDWARE_LIMIT  # ✅ 0.12m
 
 
     def get_full_lidar_scan(self, scan_msg: LaserScan) -> Dict[int, float]:
@@ -310,8 +308,8 @@ class SpatialDetector:
             clearances = self._calculate_clearances_from_lidar(lidar_obstacles)
 
             # FIXED THRESHOLD: Always use safe_distance
-            adaptive_threshold = self.thresholds.SAFE_ZONE  # 1.5m
-            logger.info(f"[THRESHOLD] Using fixed threshold {adaptive_threshold:.2f}m")
+            adaptive_threshold = self.thresholds.ZONE_2_MEDIUM  # ✅ 0.80m
+            logger.info(f"[THRESHOLD] Using zone-based threshold {adaptive_threshold:.2f}m")
 
             # Nav2 handles direction finding - just use default
             safe_directions = []  # Not used anymore

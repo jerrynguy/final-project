@@ -18,37 +18,52 @@ logger = logging.getLogger(__name__)
 
 class SafetyThresholds:
     """
-    Centralized distance thresholds for all safety systems.
+    🚨 SINGLE SOURCE OF TRUTH - ALL modules MUST import from here!
     
-    ⚠️ CRITICAL: All modules must import from here - no local overrides!
+    Design philosophy:
+    - Conservative abort (0.22m) protects hardware
+    - Generous escape threshold (0.35m) accounts for sensor noise + robot width
+    - Tight rejection arc (45°) maximizes escape options for differential drive
     """
-    # Hardware & Critical Abort Thresholds
+    
+    # ===== HARDWARE & CRITICAL ABORT =====
     HARDWARE_LIMIT = 0.12           # Physical collision distance (never breach)
-    CRITICAL_ABORT = 0.20           # Emergency backup trigger (360°)
-    CRITICAL_ABORT_FRONT = 0.20     # Frontal critical (narrower arc)
-    CRITICAL_ABORT_SIDE = 0.15      # Side obstacle warning (wider tolerance)
-    RESUME_SAFE = 0.5               # Hysteresis resume threshold
+    CRITICAL_ABORT = 0.22           # ⬆️ Emergency backup trigger (was 0.20)
+    CRITICAL_ABORT_FRONT = 0.22     # Frontal critical (±45° arc)
+    CRITICAL_ABORT_SIDE = 0.15      # Side obstacle (±90°-180° arc)
+    RESUME_SAFE = 0.60              # ⬆️ Hysteresis resume (was 0.50)
     
-    # Navigation Safety Zones
-    WARNING_ZONE = 0.50             # Start slowing down
-    CAUTION_ZONE = 1.00             # Reduce speed significantly  
-    SAFE_ZONE = 1.50                # Normal operation speed
+    # ===== NAVIGATION ZONES (for NavigationReasoner) =====
+    ZONE_1_CRITICAL = 0.40          # Zone 1: <0.4m → rotate/backup only
+    ZONE_2_MEDIUM = 0.80            # Zone 2: 0.4-0.8m → slow + aggressive steer
+    ZONE_3_FAR = 1.50               # Zone 3: >0.8m → normal speed + frontier guidance
     
-    # Directional Arc Definitions (for smart abort logic)
+    # ===== LEGACY ALIASES (backward compatibility) =====
+    WARNING_ZONE = ZONE_1_CRITICAL  # 0.40m
+    CAUTION_ZONE = ZONE_2_MEDIUM    # 0.80m
+    SAFE_ZONE = ZONE_3_FAR          # 1.50m
+    
+    # ===== ESCAPE SYSTEM =====
+    ESCAPE_SAFE_THRESHOLD = 0.35    # ⬆️ Min clearance for escape sector (was 0.30)
+                                     # Rationale: Robot width ~0.3m + sensor noise margin
+    OBSTACLE_REJECTION_ARC = 45     # ⬇️ ±45° rejection arc (was 60°)
+                                     # Rationale: Differential drive can rotate in-place
+    
+    # ===== VELOCITY LIMITS =====
+    MAX_SAFE_LINEAR_VEL = 0.6
+    MAX_SAFE_ANGULAR_VEL = 2.5
+    
+    # ===== DIRECTIONAL ARC DEFINITIONS =====
     FRONT_ARC_HALF_ANGLE = 60       # ±60° = 120° frontal cone
     SIDE_ARC_HALF_ANGLE = 90        # ±90° = 180° side awareness
     
-    # Velocity Limits
-    MAX_SAFE_LINEAR_VEL = 0.6
-    MAX_SAFE_ANGULAR_VEL = 2.5
-
-    # Rear Arc Safety Thresholds
-    REAR_ARC_ANGLE = 120            # Degrees - rear arc starts at ±120°
-    MIN_SAFE_BACKUP_CLEARANCE = 0.25  # Meters - min rear distance to allow backup
-    BACKUP_ABORT_THRESHOLD = 0.20   # Meters - emergency stop during backup
+    # ===== REAR ARC SAFETY =====
+    REAR_ARC_ANGLE = 120            # Rear arc starts at ±120°
+    MIN_SAFE_BACKUP_CLEARANCE = 0.25  # Min rear distance to allow backup
+    BACKUP_ABORT_THRESHOLD = 0.20   # Emergency stop during backup
     
-    # Recovery Behavior Thresholds
-    TIGHT_CORNER_THRESHOLD = 0.3    # If both L/R < 0.3m → tight corner (rotate-only)
+    # ===== RECOVERY BEHAVIOR =====
+    TIGHT_CORNER_THRESHOLD = 0.3    # If both L/R < 0.3m → rotate-only
     
     @classmethod
     def get_critical_distance_for_direction(cls, angle_deg: float, is_moving_forward: bool) -> float:

@@ -21,7 +21,6 @@ class Frontier:
     score: float  # Exploration priority score
     is_valid: bool = True  # True if not blocked by wall
 
-
 class FrontierDetector:
     """
     SLAM-aware frontier detection.
@@ -39,9 +38,9 @@ class FrontierDetector:
         self.last_detection_time = 0
         self.detection_interval = 3.0  # Detect every 3 seconds
         
-        # Wall safety constraints
-        self.min_safe_distance_from_wall = 2.0  # Keep 2m buffer from walls
-        self.wall_penalty_factor = 0.3  # Heavy penalty for wall-adjacent
+        # Wall safety constraints - OPTIMIZED FOR TURTLEBOT3
+        self.min_safe_distance_from_wall = 0.6  # ← CHANGED: 2.0m → 0.6m (TurtleBot3 optimized)
+        self.wall_penalty_factor = 0.8  # ← CHANGED: 0.3 → 0.8 (heavier penalty for wall-adjacent)
         
         # SLAM map values
         self.FREE = 0
@@ -157,7 +156,7 @@ class FrontierDetector:
                 if not is_valid_frontier:
                     continue
                 
-                # ✅ LAYER 2: Wall-adjacent check (NOW full_scan is defined!)
+                # LAYER 2: Wall-adjacent check (NOW full_scan is defined!)
                 is_wall_adjacent = False
                 wall_ratio = 0.0
                 
@@ -176,26 +175,35 @@ class FrontierDetector:
                         )
                         continue
                 
-                # ✅ LAYER 3: Calculate score with wall penalties
+                # LAYER 3: Calculate score with wall penalties
                 frontier_x = robot_x + distance * np.cos(np.radians(absolute_angle))
                 frontier_y = robot_y + distance * np.sin(np.radians(absolute_angle))
                 
                 distance_score = distance / self.max_frontier_distance
                 
-                wall_max_penalty = 1.0
-                if distance > max_range * 0.8:
-                    wall_max_penalty = 0.3
+                # Distance-based wall penalty (NEW: compound penalty)
+                if distance > 1.5:  # Far from wall
+                    wall_max_penalty = 1.0  # No distance penalty
+                elif distance > 0.8:  # Moderate distance
+                    wall_max_penalty = 0.7  # Some penalty
+                else:  # Close to wall (< 0.8m)
+                    wall_max_penalty = 0.3  # Heavy penalty
                 
+                # Wall-adjacent penalty (STRENGTHENED)
                 wall_adjacent_penalty = 1.0
                 if is_wall_adjacent:
-                    wall_adjacent_penalty = 1.0 - (wall_ratio * 0.6)
+                    # ← CHANGED: Use strengthened wall_penalty_factor (0.8)
+                    # Example: wall_ratio = 0.5 → penalty = 1.0 - 0.5 * 0.8 = 0.60 (40% reduction)
+                    wall_adjacent_penalty = 1.0 - (wall_ratio * self.wall_penalty_factor)
                 
+                # Direction bonus (keep existing logic)
                 direction_bonus = 1.0
                 if abs(angle_offset) < 90:
                     direction_bonus = 1.3
                 elif abs(angle_offset) < 120:
                     direction_bonus = 1.1
                 
+                # Final score calculation (compound penalty effect)
                 score = (distance_score * 
                         wall_max_penalty * 
                         wall_adjacent_penalty * 
@@ -274,8 +282,8 @@ class FrontierDetector:
         
         Strategy:
         1. Check ±30° arc around frontier direction
-        2. Count readings < 2.5m (wall threshold)
-        3. If >40% readings show walls → wall-adjacent
+        2. Count readings < 0.8m (wall threshold - TIGHTENED FOR TURTLEBOT3)
+        3. If >30% readings show walls → wall-adjacent (MORE SENSITIVE)
         
         Args:
             angle_deg: Frontier direction in degrees
@@ -288,9 +296,9 @@ class FrontierDetector:
         if not full_scan:
             return False, 0.0
         
-        WALL_THRESHOLD = 2.5  # Distance considered "close wall"
-        CHECK_ARC = 30  # Check ±30° around frontier
-        WALL_RATIO_THRESHOLD = 0.4  # 40% = wall-adjacent
+        WALL_THRESHOLD = 0.8  # ← CHANGED: 2.5m → 0.8m (tighter wall detection)
+        CHECK_ARC = 30  # Keep ±30° (reasonable for detection)
+        WALL_RATIO_THRESHOLD = 0.3  # ← CHANGED: 0.4 → 0.3 (more sensitive, 30% = wall-adjacent)
         
         wall_readings = 0
         total_checks = 0
@@ -325,7 +333,7 @@ class FrontierDetector:
             )
         
         return is_wall_adjacent, wall_ratio
-    
+
     def _get_lidar_distance_at_angle(self, lidar_data, angle_rad: float) -> float:
         """Get LiDAR distance at specific angle."""
         try:

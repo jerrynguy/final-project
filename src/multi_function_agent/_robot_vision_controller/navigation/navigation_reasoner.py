@@ -74,24 +74,25 @@ class NavigationReasoner:
         right_clear: float
     ) -> int:
         """
-        Xác định zone an toàn dựa trên clearances tổng hợp.
+        Determine navigation zone using centralized thresholds.
         
         Zones:
-        - Zone 3 (FAR): Front > 0.8m VÀ (Left > 0.5m OR Right > 0.5m)
-        - Zone 2 (MEDIUM): Front 0.4-0.8m HOẶC bị kẹp 2 bên
-        - Zone 1 (CRITICAL): Front < 0.4m
+        - Zone 1 (CRITICAL): Front < ZONE_1_CRITICAL (0.40m)
+        - Zone 2 (MEDIUM): Front < ZONE_2_MEDIUM (0.80m) OR tight corridor
+        - Zone 3 (FAR): Front >= ZONE_2_MEDIUM (0.80m)
         """
         
-        # RULE 1: Front < 0.4m → CRITICAL (tăng từ 0.3m)
-        if front_clear < 0.4:
+        # RULE 1: Front < 0.4m → CRITICAL
+        if front_clear < SafetyThresholds.ZONE_1_CRITICAL:
             return 1
         
-        # RULE 2: Front < 0.8m → MEDIUM (tăng từ 0.7m)
-        if front_clear < 0.8:
+        # RULE 2: Front < 0.8m → MEDIUM
+        if front_clear < SafetyThresholds.ZONE_2_MEDIUM:
             return 2
         
-        # RULE 3: Front OK nhưng bị kẹp 2 bên → MEDIUM
-        if left_clear < 0.5 and right_clear < 0.5:
+        # RULE 3: Tight corridor detection (both sides < 0.5m)
+        corridor_threshold = 0.5
+        if left_clear < corridor_threshold and right_clear < corridor_threshold:
             logger.warning(
                 f"[ZONE CHECK] Tight corridor: L={left_clear:.2f} R={right_clear:.2f} "
                 f"→ Zone 2 (despite Front={front_clear:.2f})"
