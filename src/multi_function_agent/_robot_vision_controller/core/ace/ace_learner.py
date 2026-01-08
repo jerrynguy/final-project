@@ -125,7 +125,7 @@ Please analyze the above mission logs and provide your diagnosis with parameter 
             # Call LLM with timeout
             response = await asyncio.wait_for(
                 self._llm.ainvoke(messages),
-                timeout=30.0
+                timeout=130.0
             )
             
             response_text = response.content.strip()
@@ -146,7 +146,7 @@ Please analyze the above mission logs and provide your diagnosis with parameter 
                 return None
                 
         except asyncio.TimeoutError:
-            logger.error("[ACE] ❌ LLM timeout after 30s")
+            logger.error("[ACE] ❌ LLM timeout after 130s")
             return None
         
         except Exception as e:
