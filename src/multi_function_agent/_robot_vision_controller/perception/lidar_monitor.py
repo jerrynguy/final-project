@@ -54,6 +54,10 @@ class LidarSafetyMonitor:
         # Movement tracking (for directional abort)
         self.last_linear_velocity = 0.0
         self.last_angular_velocity = 0.0
+
+        self.last_escape_sector = None      # Last escape direction (0-330)
+        self.last_escape_time = 0.0         # Timestamp of escape
+        self.directional_cooldown = 5.0     # Cooldown duration (seconds)
     
     def update_movement_state(self, linear_vel: float, angular_vel: float):
         """Track current movement for directional abort logic."""
@@ -594,10 +598,19 @@ class LidarSafetyMonitor:
             # Reset stuck detection
             self.consecutive_aborts_at_same_spot = 0
             self.last_abort_position = None
+
+            current_time = time.time()
+            self.last_escape_sector = target_sector
+            self.last_escape_time = current_time
+
+            logger.warning(
+                f"[DIRECTIONAL COOLDOWN] Sector {target_sector}° blocked for "
+                f"{self.directional_cooldown:.0f}s"
+            )
             
             # Transition to ESCAPE_WAIT state
             self.state = SafetyState.ESCAPE_WAIT
-            self.escape_start_time = time.time()
+            self.escape_start_time = current_time
             self.escape_duration = 10.0  # Full 10s for escape
             
             # Generate movement command
@@ -743,6 +756,48 @@ class LidarSafetyMonitor:
             logger.error(
                 f"[MISSION ABORT] Stuck in ESCAPE_WAIT for {elapsed:.1f}s "
                 f"without improvement. Cannot escape locally."
+            )
+            return True
+        
+        return False
+    
+    def is_direction_on_cooldown(self, angle_deg: float, tolerance: int = 45) -> bool:
+        """
+        Check if a direction is currently on cooldown (recently escaped from there).
+        
+        Args:
+            angle_deg: Direction to check (in degrees, -180 to 180)
+            tolerance: Angular tolerance (default: ±60°)
+        
+        Returns:
+            True if direction is on cooldown, False otherwise
+        """
+        if self.last_escape_sector is None:
+            return False
+        
+        current_time = time.time()
+        elapsed = current_time - self.last_escape_time
+        
+        # Cooldown expired
+        if elapsed > self.directional_cooldown:
+            return False
+        
+        # Normalize angle to [0, 360)
+        normalized_angle = angle_deg % 360
+        
+        # Calculate angular distance to escape sector
+        angle_diff = abs(normalized_angle - self.last_escape_sector)
+        
+        # Handle wraparound (e.g., 350° vs 10° should be 20° apart, not 340°)
+        if angle_diff > 180:
+            angle_diff = 360 - angle_diff
+        
+        # Check if within tolerance
+        if angle_diff < tolerance:
+            logger.debug(
+                f"[COOLDOWN CHECK] {angle_deg:.0f}° is within {tolerance}° of "
+                f"escape sector {self.last_escape_sector}° "
+                f"(elapsed: {elapsed:.1f}s/{self.directional_cooldown:.0f}s)"
             )
             return True
         

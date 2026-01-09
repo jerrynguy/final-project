@@ -219,23 +219,62 @@ Please analyze the above mission logs and provide your diagnosis with parameter 
         
         return valid, rejected
     
+    def filter_high_confidence_recommendations(
+        self,
+        recommendations: list,
+        min_confidence: float = 0.75
+    ) -> tuple[list, list]:
+        """
+        Filter recommendations by confidence threshold.
+        
+        Args:
+            recommendations: List of validated recommendations
+            min_confidence: Minimum confidence threshold (default: 0.75)
+        
+        Returns:
+            (high_confidence, low_confidence) tuple
+        """
+        high_confidence = []
+        low_confidence = []
+        
+        for rec in recommendations:
+            confidence = rec.get('confidence', 0.0)
+            
+            if confidence >= min_confidence:
+                high_confidence.append(rec)
+                logger.info(
+                    f"[ACE FILTER] ✅ High confidence: {rec['parameter']} "
+                    f"({confidence:.0%} ≥ {min_confidence:.0%})"
+                )
+            else:
+                low_confidence.append(rec)
+                logger.warning(
+                    f"[ACE FILTER] ⚠️ Low confidence: {rec['parameter']} "
+                    f"({confidence:.0%} < {min_confidence:.0%}) → Manual review needed"
+                )
+        
+        return high_confidence, low_confidence
+
     async def learn_from_mission(
         self,
         mission_summary: MissionSummary,
-        auto_apply: bool = False
+        auto_apply: bool = False,
+        min_confidence: float = 0.75 
     ) -> Optional[Dict]:
         """
         Complete learning workflow:
         1. Analyze logs
         2. Validate recommendations
-        3. Optionally apply adjustments
+        3. Filter by confidence
+        4. Auto-apply high-confidence adjustments
         
         Args:
             mission_summary: Mission summary
-            auto_apply: Tự động apply adjustments (default: False)
+            auto_apply: Auto-apply high-confidence adjustments (default: False)
+            min_confidence: Minimum confidence for auto-apply (default: 0.75)
         
         Returns:
-            Learning result với analysis + validation status
+            Learning result with analysis + application status
         """
         logger.info("=" * 60)
         logger.info("[ACE] POST-MISSION LEARNING STARTED")
@@ -257,39 +296,111 @@ Please analyze the above mission logs and provide your diagnosis with parameter 
                 'analysis': analysis,
                 'valid_recommendations': [],
                 'rejected_recommendations': [],
+                'high_confidence': [],
+                'low_confidence': [],
                 'applied': False
             }
         
         valid, rejected = self.validate_recommendations(recommendations)
         
+        # ✅ NEW: Step 3: Filter by confidence
+        high_conf, low_conf = self.filter_high_confidence_recommendations(
+            valid, 
+            min_confidence
+        )
+        
         result = {
             'analysis': analysis,
             'valid_recommendations': valid,
             'rejected_recommendations': rejected,
+            'high_confidence': high_conf,    # ✅ NEW field
+            'low_confidence': low_conf,      # ✅ NEW field
             'applied': False
         }
         
-        # Step 3: Apply if requested
-        if auto_apply and valid:
+        # ✅ MODIFIED: Step 4: Auto-apply ONLY high-confidence
+        if auto_apply:
             from multi_function_agent._robot_vision_controller.core.ace.parameter_manager import (
                 ParameterManager
             )
             
             manager = ParameterManager()
             
-            logger.info(f"[ACE] Applying {len(valid)} adjustments...")
-            
-            applied = manager.apply_adjustments(valid)
-            result['applied'] = applied
-            
-            if applied:
-                logger.info("[ACE] ✅ Adjustments applied successfully")
-                manager.save_to_file()
+            # Apply high-confidence recommendations
+            if high_conf:
+                logger.info(
+                    f"[ACE AUTO-APPLY] Applying {len(high_conf)} high-confidence "
+                    f"adjustments (≥{min_confidence:.0%})..."
+                )
+                
+                applied = manager.apply_adjustments(high_conf)
+                result['applied'] = applied
+                
+                if applied:
+                    logger.info("[ACE] ✅ High-confidence adjustments applied")
+                    manager.save_to_file()
+                else:
+                    logger.error("[ACE] ❌ Failed to apply adjustments")
             else:
-                logger.error("[ACE] ❌ Failed to apply adjustments")
+                logger.info("[ACE] No high-confidence recommendations to auto-apply")
+            
+            # ✅ NEW: Save low-confidence for manual review
+            if low_conf:
+                logger.warning(
+                    f"[ACE MANUAL REVIEW] {len(low_conf)} low-confidence "
+                    f"recommendations saved for review:"
+                )
+                for rec in low_conf:
+                    logger.warning(
+                        f"  - {rec['parameter']}: {rec['current_value']:.3f} → "
+                        f"{rec['suggested_value']:.3f} (confidence: {rec['confidence']:.0%})"
+                    )
+                
+                # Save to separate file for manual review
+                self._save_manual_review_recommendations(low_conf, manager)
         
         logger.info("=" * 60)
         logger.info("[ACE] POST-MISSION LEARNING COMPLETE")
         logger.info("=" * 60)
         
         return result
+    
+    def _save_manual_review_recommendations(
+        self,
+        low_confidence_recs: list,
+        param_manager
+    ):
+        """
+        Save low-confidence recommendations to separate file for manual review.
+        
+        Args:
+            low_confidence_recs: List of low-confidence recommendations
+            param_manager: ParameterManager instance
+        """
+        import time
+        
+        review_file = param_manager.learned_params_file.parent / "manual_review.json"
+        
+        data = {
+            "timestamp": time.time(),
+            "recommendations": [
+                {
+                    "parameter": rec['parameter'],
+                    "current_value": rec['current_value'],
+                    "suggested_value": rec['suggested_value'],
+                    "confidence": rec['confidence'],
+                    "reasoning": rec['reasoning']
+                }
+                for rec in low_confidence_recs
+            ],
+            "note": "These recommendations have low confidence (<75%) and require manual review before applying."
+        }
+        
+        try:
+            import json
+            with open(review_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            logger.info(f"[ACE] Manual review recommendations saved to: {review_file}")
+        except Exception as e:
+            logger.error(f"[ACE] Failed to save manual review file: {e}")

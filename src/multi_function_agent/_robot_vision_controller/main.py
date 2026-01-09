@@ -112,17 +112,18 @@ async def _robot_vision_controller(
     try:
         logger.info(f"🎯 Starting: {control_mode} | Goal: {navigation_goal} | Safety: {safety_level}")
         
+        robot_interface = RobotControllerInterface()
+        vision_analyzer = RobotVisionAnalyzer(robot_controller=robot_interface)
+        safety_monitor = LidarSafetyMonitor()
+
         navigation_reasoner = NavigationReasoner(
             safety_level=safety_level, 
-            max_speed=robot_config["max_speed"]
+            max_speed=robot_config["max_speed"],
+            safety_monitor=safety_monitor
         )
 
         exploration_boost = robot_config.get("exploration_speed_boost", 1.0)
         navigation_reasoner.set_exploration_boost(exploration_boost)
-
-        robot_interface = RobotControllerInterface()
-        vision_analyzer = RobotVisionAnalyzer(robot_controller=robot_interface)
-        safety_monitor = LidarSafetyMonitor()
 
         logger.info("✅ AI Recovery system initialized for explore mode")
 
@@ -680,13 +681,17 @@ async def run_robot_control_loop(
             
             learning_result = await ace_learner.learn_from_mission(
                 mission_summary=mission_summary,
-                auto_apply=False  # Manual review recommended for safety
+                auto_apply=True,           # Enable auto-apply
+                min_confidence=0.75        # Only apply if confidence ≥75%
             )
             
             if learning_result:
                 analysis = learning_result['analysis']
                 valid_recs = learning_result['valid_recommendations']
                 rejected = learning_result['rejected_recommendations']
+                high_conf = learning_result.get('high_confidence', [])  
+                low_conf = learning_result.get('low_confidence', [])    
+                applied = learning_result.get('applied', False)        
                 
                 # Display results
                 logger.info("=" * 60)
@@ -704,39 +709,61 @@ async def run_robot_control_loop(
                 death_pendulum = analysis.get('death_pendulum_detected', False)
                 logger.info(f"\n🚨 DEATH PENDULUM DETECTED: {death_pendulum}")
                 
-                logger.info(f"\n📊 RECOMMENDATIONS: {len(valid_recs)} valid, {len(rejected)} rejected")
+                logger.info(
+                    f"\n📊 RECOMMENDATIONS: {len(valid_recs)} valid, {len(rejected)} rejected"
+                )
                 
-                # Show valid recommendations
-                if valid_recs:
+                # ✅ NEW: Show high-confidence (auto-applied)
+                if high_conf:
                     logger.info("\n" + "=" * 60)
-                    logger.info("💡 RECOMMENDED PARAMETER ADJUSTMENTS:")
+                    logger.info("✅ AUTO-APPLIED ADJUSTMENTS (High Confidence ≥75%):")
                     logger.info("=" * 60)
                     
-                    for i, rec in enumerate(valid_recs, 1):
+                    for i, rec in enumerate(high_conf, 1):
+                        logger.info(f"\n{i}. {rec['parameter']}")
+                        logger.info(f"   Current value:  {rec['current_value']:.3f}")
+                        logger.info(f"   Applied value:  {rec['suggested_value']:.3f}")
+                        logger.info(f"   Confidence:     {rec['confidence']:.0%}")
+                        logger.info(f"   Reasoning:")
+                        
+                        import textwrap
+                        wrapped = textwrap.fill(
+                            rec['reasoning'], 
+                            width=60, 
+                            initial_indent='     ', 
+                            subsequent_indent='     '
+                        )
+                        logger.info(wrapped)
+                    
+                    if applied:
+                        logger.info("\n✅ These adjustments have been applied and saved.")
+                        logger.info("   They will be used in the next mission.")
+                
+                # ✅ NEW: Show low-confidence (manual review needed)
+                if low_conf:
+                    logger.info("\n" + "=" * 60)
+                    logger.info("⚠️  MANUAL REVIEW NEEDED (Low Confidence <75%):")
+                    logger.info("=" * 60)
+                    
+                    for i, rec in enumerate(low_conf, 1):
                         logger.info(f"\n{i}. {rec['parameter']}")
                         logger.info(f"   Current value:  {rec['current_value']:.3f}")
                         logger.info(f"   Suggested:      {rec['suggested_value']:.3f}")
                         logger.info(f"   Confidence:     {rec['confidence']:.0%}")
                         logger.info(f"   Reasoning:")
-                        # Word wrap reasoning
-                        reasoning = rec['reasoning']
+                        
                         import textwrap
-                        wrapped = textwrap.fill(reasoning, width=60, initial_indent='     ', subsequent_indent='     ')
+                        wrapped = textwrap.fill(
+                            rec['reasoning'], 
+                            width=60, 
+                            initial_indent='     ', 
+                            subsequent_indent='     '
+                        )
                         logger.info(wrapped)
                     
-                    logger.info("\n" + "=" * 60)
-                    logger.info("📝 TO APPLY THESE ADJUSTMENTS:")
-                    logger.info("=" * 60)
-                    logger.info("Option 1 - Review and apply manually:")
-                    logger.info("  python -m multi_function_agent.ace_apply --review")
-                    logger.info("  python -m multi_function_agent.ace_apply --apply")
-                    logger.info("")
-                    logger.info("Option 2 - Auto-apply on next run:")
-                    logger.info("  Parameters are saved to learned_parameters.json")
-                    logger.info("  Will be loaded automatically next time")
-                    logger.info("=" * 60)
-                else:
-                    logger.info("\n✅ No adjustments needed - parameters look good!")
+                    logger.info("\n⚠️  These recommendations require manual review:")
+                    logger.info("   Saved to: configs/manual_review.json")
+                    logger.info("   Review and apply manually if appropriate.")
                 
                 # Show rejected if any
                 if rejected:
@@ -746,6 +773,8 @@ async def run_robot_control_loop(
                         reason = rej['rejection_reason']
                         logger.info(f"  {i}. {rec['parameter']}: {reason}")
                 
+                # ✅ REMOVED: Old "TO APPLY" instructions (không cần nữa vì auto-apply)
+                
                 # Additional notes
                 if analysis.get('additional_notes'):
                     logger.info(f"\n💭 ADDITIONAL NOTES:")
@@ -754,9 +783,6 @@ async def run_robot_control_loop(
                 logger.info("\n" + "=" * 60)
                 logger.info("[ACE] POST-MISSION LEARNING COMPLETE")
                 logger.info("=" * 60)
-                
-            else:
-                logger.warning("[ACE] ⚠️  Learning failed - no analysis generated")
         
         except asyncio.TimeoutError:
             logger.error("[ACE] ❌ LLM timeout - analysis took too long")

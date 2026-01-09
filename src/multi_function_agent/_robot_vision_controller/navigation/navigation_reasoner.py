@@ -16,6 +16,7 @@ from multi_function_agent._robot_vision_controller.utils.movement_commands impor
 )
 from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator, SafetyThresholds
 from multi_function_agent._robot_vision_controller.perception.detector.frontier_detector import FrontierDetector
+from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,12 @@ class NavigationReasoner:
     High-level navigation decision maker for autonomous robot control.
     """
     
-    def __init__(self, safety_level: str = "high", max_speed: float = 0.5):
+    def __init__(
+            self, 
+            safety_level: str = "high", 
+            max_speed: float = 0.5,
+            safety_monitor: Optional[LidarSafetyMonitor] = None
+        ):
         """
         Initialize navigation reasoner.
         
@@ -40,6 +46,8 @@ class NavigationReasoner:
         self.safety_validator = SafetyValidator()
         self.command_factory = CommandFactory(base_speed=max_speed, params=self.nav_params)
         
+        self.safety_monitor = safety_monitor
+
         # Safety level speed multipliers
         self.speed_multipliers = {
             "high": 0.3,
@@ -686,8 +694,19 @@ class NavigationReasoner:
         else:
             # Try to get frontier direction
             best_frontier = None
+            frontier_blocked_by_cooldown = False
+
             if self.use_frontier_detection and robot_pos:
                 best_frontier = self.frontier_detector.get_best_frontier(robot_pos)
+
+                if best_frontier and self.safety_monitor:
+                    if self.safety_monitor.is_direction_on_cooldown(best_frontier.angle):
+                        logger.warning(
+                            f"[FRONTIER BLOCKED] {best_frontier.angle:.0f}° on cooldown "
+                            f"(recently escaped from there) → Using clearance-based steering"
+                        )
+                        frontier_blocked_by_cooldown = True
+                        best_frontier = None
             
             # Frontier-guided navigation
             if best_frontier:
@@ -714,7 +733,12 @@ class NavigationReasoner:
                 direction, angular = self._decide_avoidance_direction(clearances)
                 
                 # Log reason for not using frontier
-                if is_tight_space:
+                if frontier_blocked_by_cooldown: 
+                    logger.info(
+                        f"[ZONE 3 - CLEARANCE] Frontier blocked by cooldown - "
+                        f"steering {direction} (angular: {angular:.2f})"
+                    )
+                elif is_tight_space:
                     logger.info(
                         f"[ZONE 3 - CLEARANCE] Tight space - using clearance-based "
                         f"steering {direction} (angular: {angular:.2f})"
