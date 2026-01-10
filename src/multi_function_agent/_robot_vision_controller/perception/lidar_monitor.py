@@ -20,6 +20,7 @@ class SafetyState(Enum):
     NORMAL = "normal"           # Hoạt động bình thường
     ABORT = "abort"             # Đang execute recovery
     ESCAPE_WAIT = "escape_wait" # Chờ robot thoát (3s pause)
+    COOLDOWN = "cooldown"
 
 
 class LidarSafetyMonitor:
@@ -45,7 +46,11 @@ class LidarSafetyMonitor:
         
         # Escape tracking
         self.escape_start_time = 0.0
-        self.escape_duration = 8.0  # 8 seconds escape window
+        self.escape_duration = 15.0  # 15 seconds escape window
+
+        # Cooldown tracking
+        self.cooldown_start_time = 0.0
+        self.cooldown_duration = 3.0  # ← 3 giây pause buffer (yêu cầu #3)
         
         # Stuck detection
         self.last_abort_position = None
@@ -385,10 +390,10 @@ class LidarSafetyMonitor:
         OBSTACLE_REJECTION_ARC = SafetyThresholds.OBSTACLE_REJECTION_ARC  # ✅ 45°
         
         # ✅ Weight configuration (unchanged, but now documented)
-        W_CLEARANCE = 0.40  # Clearance distance (dominant)
-        W_OBSTACLE  = 0.25  # Obstacle avoidance angle
+        W_CLEARANCE = 0.25  # Clearance distance (dominant)
+        W_OBSTACLE  = 0.50  # Obstacle avoidance angle
         W_OPPOSITE  = 0.20  # Opposite direction bonus
-        W_FORWARD   = 0.15  # Forward bias
+        W_FORWARD   = 0.05  # Forward bias
         
         # Filter safe sectors
         safe_sectors = {
@@ -723,12 +728,20 @@ class LidarSafetyMonitor:
 
     def get_stats(self) -> Dict:
         """Get safety monitor statistics."""
-        return {
+        stats = {
             'total_aborts': self.abort_count,
             'current_state': self.state.value,
             'consecutive_same_spot_aborts': self.consecutive_aborts_at_same_spot,
             'movement_state': 'forward' if self._is_moving_forward() else 'turning'
         }
+        
+        # ✅ Add cooldown info if in COOLDOWN state
+        if self.state == SafetyState.COOLDOWN:
+            import time
+            elapsed = time.time() - self.cooldown_start_time
+            stats['cooldown_progress'] = f"{elapsed:.1f}s/{self.cooldown_duration:.1f}s"
+        
+        return stats
     
     def reset_stats(self):
         """Reset statistics (for testing)."""
@@ -809,7 +822,10 @@ class LidarSafetyMonitor:
         robot_pos: Optional[Dict] = None
     ) -> Dict:
         """
-        Main safety check với state machine.
+        Main safety check với state machine (REFACTORED với COOLDOWN state).
+        
+        State Flow:
+        NORMAL → ABORT → ESCAPE_WAIT → COOLDOWN → NORMAL
         """
         if lidar_data is None:
             logger.error("[CRITICAL] No LIDAR data - ABORT")
@@ -827,54 +843,67 @@ class LidarSafetyMonitor:
             
             # ===== STATE MACHINE =====
             
-            # STATE 1: ESCAPE_WAIT
+            # ========================================
+            # STATE 1: ESCAPE_WAIT (đang thực hiện escape)
+            # ========================================
             if self.state == SafetyState.ESCAPE_WAIT:
                 elapsed = current_time - self.escape_start_time
                 
-                # ✅ THAY ĐỔI 1: Check success FREQUENTLY (every call, not just timeout)
-                # Track escape start distance for improvement calculation
+                # ✅ Track start distance ONLY ONCE khi enter state
                 if not hasattr(self, '_escape_start_distance'):
                     self._escape_start_distance = min_distance
+                    self._escape_enter_time = current_time
+                    logger.debug(
+                        f"[ESCAPE_WAIT] Started with distance: {min_distance:.2f}m"
+                    )
                 
-                # SUCCESS CHECK: Distance improved significantly (>20% increase OR >0.5m)
+                # Calculate improvement
                 distance_improvement = min_distance - self._escape_start_distance
                 improvement_ratio = distance_improvement / max(self._escape_start_distance, 0.1)
                 
-                if min_distance > self.thresholds.RESUME_SAFE:  # >0.5m
+                # ✅ SUCCESS CHECK: Transition to COOLDOWN (NOT NORMAL)
+                if min_distance > self.thresholds.RESUME_SAFE:  # ← Tăng từ 0.6m → 0.8m
                     logger.info(
                         f"[ESCAPE SUCCESS] ✓ Cleared to {min_distance:.2f}m "
-                        f"after {elapsed:.1f}s (improved +{distance_improvement:.2f}m) → NORMAL"
+                        f"after {elapsed:.1f}s (improved +{distance_improvement:.2f}m) "
+                        f"→ COOLDOWN"
                     )
-                    self.state = SafetyState.NORMAL
                     
-                    # ✅ CLEANUP: Reset tracking variables
+                    # Transition to COOLDOWN state
+                    self.state = SafetyState.COOLDOWN
+                    self.cooldown_start_time = current_time
+                    
+                    # Cleanup tracking variables
                     if hasattr(self, '_escape_start_distance'):
                         delattr(self, '_escape_start_distance')
                     if hasattr(self, '_rotate_attempted'):
                         self._rotate_attempted = False
+                    if hasattr(self, '_alternative_attempted'):
+                        delattr(self, '_alternative_attempted')
                     
+                    # Return PAUSE command (không cho forward trong COOLDOWN)
                     return {
                         'abort': False,
-                        'command': None,
+                        'command': self._pause_command(),
                         'min_distance': min_distance,
-                        'state': 'normal'
+                        'state': 'cooldown_buffer'
                     }
                 
-                # ✅ THAY ĐỔI 2: EARLY FAILURE DETECTION (after 2s, no improvement)
-                if elapsed > 2.0 and improvement_ratio < 0.1:  # <10% improvement after 2s
+                # ✅ EARLY FAILURE DETECTION (after 2s, no improvement)
+                if elapsed > 2.0 and improvement_ratio < 0.1:
                     logger.warning(
                         f"[ESCAPE STALL] ⚠️ No improvement after {elapsed:.1f}s "
                         f"(distance: {self._escape_start_distance:.2f}m → {min_distance:.2f}m, "
                         f"improvement: {improvement_ratio:.1%})"
                     )
                     
-                    # ✅ FALLBACK 1: Try alternative direction if available
+                    # FALLBACK 1: Try alternative direction
                     if not hasattr(self, '_alternative_attempted'):
                         logger.warning("[ESCAPE STALL] Trying alternative direction...")
                         
                         sector_clearances = self._analyze_360_clearances(obstacles)
                         
-                        # Get second-best direction (skip already-tried direction)
+                        # Get second-best direction
                         sorted_sectors = sorted(
                             sector_clearances.items(),
                             key=lambda x: x[1],
@@ -892,12 +921,12 @@ class LidarSafetyMonitor:
                             
                             self._alternative_attempted = True
                             self.escape_start_time = current_time  # Reset timer
-                            self._escape_start_distance = min_distance  # Reset baseline
+                            self._escape_start_distance = min_distance
                             
-                            # Generate command for alternative direction
+                            # Generate alternative escape command
                             action_type, target_sector, clearance = self._select_escape_direction(
                                 sector_clearances,
-                                0.0,  # Don't use robot heading
+                                0.0,
                                 obstacles[0][0] if obstacles else 0.0
                             )
                             
@@ -911,8 +940,8 @@ class LidarSafetyMonitor:
                                 'clearances': sector_clearances
                             }
                 
-                # TIMEOUT HANDLING (6s passed, still not clear)
-                if elapsed > self.escape_duration:
+                # ✅ TIMEOUT HANDLING (15s timeout)
+                if elapsed > self.escape_duration:  # ← 15s
                     logger.error(
                         f"[ESCAPE TIMEOUT] ✗ Failed after {elapsed:.1f}s "
                         f"(still at {min_distance:.2f}m, started at {self._escape_start_distance:.2f}m)"
@@ -920,11 +949,10 @@ class LidarSafetyMonitor:
                     
                     # Analyze current situation
                     sector_clearances = self._analyze_360_clearances(obstacles)
-                    
                     max_sector = max(sector_clearances, key=sector_clearances.get)
                     max_clearance = sector_clearances[max_sector]
                     
-                    # ✅ FALLBACK 2: Rotate rescue (if not attempted yet AND clearance >0.2m)
+                    # FALLBACK 2: Rotate rescue (if not attempted AND clearance >0.2m)
                     if max_clearance > 0.20 and not hasattr(self, '_rotate_attempted'):
                         logger.warning(
                             f"[TIMEOUT RESCUE] Attempting rotate toward {max_sector}° "
@@ -938,7 +966,7 @@ class LidarSafetyMonitor:
                         direction = 'left' if max_sector <= 180 else 'right'
                         
                         # Extend escape window for rescue attempt
-                        self.escape_start_time = current_time  # Reset timer
+                        self.escape_start_time = current_time
                         self.escape_duration = 3.0
                         
                         return {
@@ -958,14 +986,48 @@ class LidarSafetyMonitor:
                             'clearances': sector_clearances
                         }
                     
-                    # ✅ FALLBACK 3: Nav2 rescue (all local attempts failed)
+                    # FALLBACK 3: RETRY với hướng khác (theo yêu cầu Option A)
+                    if max_clearance > self.thresholds.ZONE_1_CRITICAL:
+                        logger.warning(
+                            f"[TIMEOUT RETRY] Retrying escape toward {max_sector}° "
+                            f"(clearance: {max_clearance:.2f}m)"
+                        )
+                        
+                        # Reset flags
+                        if hasattr(self, '_rotate_attempted'):
+                            delattr(self, '_rotate_attempted')
+                        if hasattr(self, '_alternative_attempted'):
+                            delattr(self, '_alternative_attempted')
+                        
+                        # Reset timer and retry
+                        self.escape_start_time = current_time
+                        self._escape_start_distance = min_distance
+                        
+                        # Generate new escape command
+                        action_type, target_sector, clearance = self._select_escape_direction(
+                            sector_clearances,
+                            0.0,
+                            obstacles[0][0] if obstacles else 0.0
+                        )
+                        
+                        return {
+                            'abort': True,
+                            'command': self._generate_escape_command(
+                                action_type, target_sector, clearance
+                            ),
+                            'min_distance': min_distance,
+                            'state': 'escape_retry',
+                            'clearances': sector_clearances
+                        }
+                    
+                    # FALLBACK 4: True deadlock → Nav2 rescue
                     logger.error(
                         f"[TIMEOUT] Cannot escape locally "
                         f"(max clearance: {max_clearance:.2f}m at {max_sector}°)"
                     )
                     logger.error("Requesting Nav2 global planner...")
                     
-                    # Reset flags and state
+                    # Reset all flags
                     if hasattr(self, '_rotate_attempted'):
                         delattr(self, '_rotate_attempted')
                     if hasattr(self, '_alternative_attempted'):
@@ -984,7 +1046,7 @@ class LidarSafetyMonitor:
                         'clearances': sector_clearances
                     }
                 
-                # ✅ Still escaping - pause commands
+                # Still escaping - pause commands
                 logger.debug(
                     f"[ESCAPING] {elapsed:.1f}s/{self.escape_duration:.1f}s, "
                     f"dist={min_distance:.2f}m (started: {self._escape_start_distance:.2f}m, "
@@ -997,7 +1059,68 @@ class LidarSafetyMonitor:
                     'state': 'escape_wait'
                 }
             
-            # STATE 2: NORMAL - Check for new abort
+            # ========================================
+            # STATE 2: COOLDOWN (buffer sau escape)
+            # ========================================
+            if self.state == SafetyState.COOLDOWN:
+                """
+                COOLDOWN state: Robot đã escape thành công, pause 3s để stabilize
+                trước khi cho phép forward command.
+                
+                Mục đích:
+                - Tránh robot forward ngay sau escape → abort lại
+                - Cho robot thời gian stabilize (gyro/encoder settle)
+                - Verify distance vẫn safe trước khi continue
+                """
+                elapsed = current_time - self.cooldown_start_time
+                
+                # ✅ SAFETY RE-CHECK: Nếu distance giảm → rollback to ESCAPE_WAIT
+                if min_distance < 0.50:  # ← WARNING threshold
+                    logger.warning(
+                        f"[COOLDOWN] ⚠️ Distance decreased to {min_distance:.2f}m "
+                        f"→ Rolling back to ESCAPE_WAIT"
+                    )
+                    
+                    # Rollback to escape
+                    self.state = SafetyState.ESCAPE_WAIT
+                    self.escape_start_time = current_time
+                    self._escape_start_distance = min_distance
+                    
+                    # Re-analyze and escape
+                    return self._force_escape_response(obstacles, robot_pos)
+                
+                # ✅ COOLDOWN COMPLETE
+                if elapsed >= self.cooldown_duration:  # ← 3 giây buffer
+                    logger.info(
+                        f"[COOLDOWN COMPLETE] ✓ {elapsed:.1f}s elapsed, "
+                        f"distance stable at {min_distance:.2f}m → NORMAL"
+                    )
+                    
+                    # NOW safe to transition to NORMAL
+                    self.state = SafetyState.NORMAL
+                    
+                    return {
+                        'abort': False,
+                        'command': None,  # ← Cho phép main loop execute forward
+                        'min_distance': min_distance,
+                        'state': 'normal'
+                    }
+                
+                # Still in cooldown - continue pausing
+                logger.debug(
+                    f"[COOLDOWN] {elapsed:.1f}s/{self.cooldown_duration:.1f}s, "
+                    f"dist={min_distance:.2f}m (stable)"
+                )
+                return {
+                    'abort': False,
+                    'command': self._pause_command(),  # ← Continue pausing
+                    'min_distance': min_distance,
+                    'state': 'cooldown'
+                }
+            
+            # ========================================
+            # STATE 3: NORMAL - Check for new abort
+            # ========================================
             abort_obstacle = self._find_abort_obstacle(obstacles)
             
             if abort_obstacle:
@@ -1017,7 +1140,7 @@ class LidarSafetyMonitor:
                     f"({distance:.3f}m) → RECOVERY"
                 )
                 
-                # ✅ TRACK: Record starting distance for escape validation
+                # Track starting distance for escape validation
                 self._escape_start_distance = distance
                 
                 # Generate recovery command using 360° analysis
@@ -1040,4 +1163,5 @@ class LidarSafetyMonitor:
                 'command': self._emergency_stop(),
                 'min_distance': 0.0,
                 'state': 'error'
-            }
+            }     
+        

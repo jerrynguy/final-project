@@ -31,10 +31,10 @@ class SafetyThresholds:
     CRITICAL_ABORT = 0.22           # ⬆️ Emergency backup trigger (was 0.20)
     CRITICAL_ABORT_FRONT = 0.22     # Frontal critical (±45° arc)
     CRITICAL_ABORT_SIDE = 0.15      # Side obstacle (±90°-180° arc)
-    RESUME_SAFE = 0.60              # ⬆️ Hysteresis resume (was 0.50)
+    RESUME_SAFE = 0.80              # ⬆️ Hysteresis resume 
     
     # ===== NAVIGATION ZONES (for NavigationReasoner) =====
-    ZONE_1_CRITICAL = 0.40          # Zone 1: <0.4m → rotate/backup only
+    ZONE_1_CRITICAL = 0.30          # Zone 1: <0.4m → rotate/backup only
     ZONE_2_MEDIUM = 0.80            # Zone 2: 0.4-0.8m → slow + aggressive steer
     ZONE_3_FAR = 1.50               # Zone 3: >0.8m → normal speed + frontier guidance
     

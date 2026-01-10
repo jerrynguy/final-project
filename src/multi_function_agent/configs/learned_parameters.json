@@ -1,20 +1,13 @@
 {
   "version": 1,
-  "last_updated": 1767949765.5904567,
+  "last_updated": 1767954297.4809136,
   "adjustments": [
     {
-      "parameter": "WARNING_ZONE",
-      "value": 0.5,
-      "reasoning": "Current warning zone too narrow, causing robot to become overly cautious and unable to make progress. Increasing to 0.5m allows for more flexibility in navigation.",
+      "parameter": "SAFE_ZONE",
+      "value": 1.2,
+      "reasoning": "Current safety zone is too conservative, preventing robot from escaping. Reducing to 1.2m allows for more aggressive escape maneuvers while maintaining safety",
       "confidence": 0.85,
-      "applied_at": 1767949765.5902379
-    },
-    {
-      "parameter": "RESUME_SAFE",
-      "value": 0.7,
-      "reasoning": "Current resume safe distance too short, causing robot to re-enter warning zone too quickly. Increasing to 0.7m allows for more time to recover and avoid re-triggering safety checks.",
-      "confidence": 0.8,
-      "applied_at": 1767949765.5903056
+      "applied_at": 1767954297.4807653
     }
   ]
 }
