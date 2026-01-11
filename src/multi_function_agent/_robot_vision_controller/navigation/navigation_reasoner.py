@@ -162,13 +162,10 @@ class NavigationReasoner:
         """
         direction, angular = self._decide_avoidance_direction(clearances)
         
-        # Adaptive speed: closer = slower
-        # front_clear: 0.7m → speed 0.6x
-        # front_clear: 0.5m → speed 0.4x
-        # front_clear: 0.3m → speed 0.2x
-        speed_factor = (front_clear - 0.3) / 0.4  # Linear scale 0.0-1.0
-        speed_factor = max(0.2, min(0.6, speed_factor))
+        speed_factor = (front_clear - 0.3) / 0.4  
+        speed_factor = max(0.15, min(0.4, speed_factor))
         
+        angular = angular * 1.4  # Boost angular by 40%
         linear_vel = self.base_speed * self.exploration_boost * speed_factor
         
         logger.info(

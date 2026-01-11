@@ -28,10 +28,10 @@ class SafetyThresholds:
     
     # ===== HARDWARE & CRITICAL ABORT =====
     HARDWARE_LIMIT = 0.12           # Physical collision distance (never breach)
-    CRITICAL_ABORT = 0.22           # ⬆️ Emergency backup trigger (was 0.20)
+    CRITICAL_ABORT = 0.25           # ⬆️ Emergency backup trigger (was 0.20)
     CRITICAL_ABORT_FRONT = 0.22     # Frontal critical (±45° arc)
     CRITICAL_ABORT_SIDE = 0.15      # Side obstacle (±90°-180° arc)
-    RESUME_SAFE = 0.45              # ⬆️ Hysteresis resume 
+    RESUME_SAFE = 0.6              # ⬆️ Hysteresis resume 
     
     # ===== NAVIGATION ZONES (for NavigationReasoner) =====
     ZONE_1_CRITICAL = 0.30          # Zone 1: <0.4m → rotate/backup only
@@ -44,9 +44,9 @@ class SafetyThresholds:
     SAFE_ZONE = ZONE_3_FAR          # 1.50m
     
     # ===== ESCAPE SYSTEM =====
-    ESCAPE_SAFE_THRESHOLD = 0.35    # ⬆️ Min clearance for escape sector (was 0.30)
+    ESCAPE_SAFE_THRESHOLD = 0.40    # ⬆️ Min clearance for escape sector (was 0.30)
                                      # Rationale: Robot width ~0.3m + sensor noise margin
-    OBSTACLE_REJECTION_ARC = 30     # ±30° arc for obstacle rejection
+    OBSTACLE_REJECTION_ARC = 45     # ±45° arc for obstacle rejection
                                      # Rationale: Differential drive can rotate in-place
     
     # ===== VELOCITY LIMITS =====

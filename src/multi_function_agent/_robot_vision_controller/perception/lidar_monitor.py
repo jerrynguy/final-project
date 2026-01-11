@@ -46,11 +46,11 @@ class LidarSafetyMonitor:
         
         # Escape tracking
         self.escape_start_time = 0.0
-        self.escape_duration = 15.0  # 15 seconds escape window
+        self.escape_duration = 8.0  # 8 seconds escape window
 
         # Cooldown tracking
         self.cooldown_start_time = 0.0
-        self.cooldown_duration = 3.0  # ← 3 giây pause buffer (yêu cầu #3)
+        self.cooldown_duration = 5.0  # ← 5 giây pause buffer 
         
         # Stuck detection
         self.last_abort_position = None
@@ -62,7 +62,7 @@ class LidarSafetyMonitor:
 
         self.last_escape_sector = None      # Last escape direction (0-330)
         self.last_escape_time = 0.0         # Timestamp of escape
-        self.directional_cooldown = 5.0     # Cooldown duration (seconds)
+        self.directional_cooldown = 8.0     # Cooldown duration (seconds)
     
     def update_movement_state(self, linear_vel: float, angular_vel: float):
         """Track current movement for directional abort logic."""
@@ -272,14 +272,14 @@ class LidarSafetyMonitor:
         
         # ===== FORWARD MOVEMENT =====
         if action_type == 'forward':
-            # ⬆️ Increased linear speed: 0.25 → 0.30 m/s
-            # ⬆️ Increased duration: +20% (clearance * 0.84)
-            duration = min(3.6, (clearance * 0.84) / 0.30)  # Was: min(3.0, clearance*0.7/0.25)
+        #  TĂNG: linear speed 0.30 → 0.35 m/s
+        #  TĂNG: duration multiplier 0.84 → 1.0
+            duration = min(4.0, (clearance * 1.0) / 0.35)  # Was: min(3.0, clearance*0.7/0.25)
             
             return {
                 'action': 'escape_forward',
                 'parameters': {
-                    'linear_velocity': 0.30,  # ⬆️ Was 0.25
+                    'linear_velocity': 0.35,  
                     'angular_velocity': 0.0,
                     'duration': duration
                 },
@@ -290,9 +290,9 @@ class LidarSafetyMonitor:
             return {
                 'action': 'escape_turn_right',
                 'parameters': {
-                    'linear_velocity': 0.25,  # ⬆️ Was 0.20
-                    'angular_velocity': -0.4,
-                    'duration': 3.0  # ⬆️ Was 2.5 (+20%)
+                    'linear_velocity': 0.30,  
+                    'angular_velocity': -0.5,
+                    'duration': 3.5
                 },
                 'reason': f'escape_turn_right_{target_sector}deg'
             }
@@ -301,9 +301,9 @@ class LidarSafetyMonitor:
             return {
                 'action': 'escape_turn_left',
                 'parameters': {
-                    'linear_velocity': 0.25,  # ⬆️ Was 0.20
-                    'angular_velocity': 0.4,
-                    'duration': 3.0  # ⬆️ Was 2.5 (+20%)
+                    'linear_velocity': 0.30,  
+                    'angular_velocity': 0.5,
+                    'duration': 3.5  
                 },
                 'reason': f'escape_turn_left_{target_sector}deg'
             }
@@ -314,8 +314,8 @@ class LidarSafetyMonitor:
                 'action': 'escape_rotate_right',
                 'parameters': {
                     'linear_velocity': 0.0,
-                    'angular_velocity': -0.7,
-                    'duration': 2.4  # ⬆️ Was 2.0 (+20%)
+                    'angular_velocity': -0.8,
+                    'duration': 2.5  
                 },
                 'reason': f'escape_rotate_right_{target_sector}deg'
             }
@@ -325,8 +325,8 @@ class LidarSafetyMonitor:
                 'action': 'escape_rotate_left',
                 'parameters': {
                     'linear_velocity': 0.0,
-                    'angular_velocity': 0.7,  # ← Rotate LEFT (positive)
-                    'duration': 2.4  # ← +20% duration
+                    'angular_velocity': 0.8,  
+                    'duration': 2.5  
                 },
                 'confidence': 0.9,
                 'reason': f'escape_rotate_left_{target_sector}deg'
@@ -334,12 +334,12 @@ class LidarSafetyMonitor:
 
         elif action_type == 'backup':
             # ⬆️ Increased backup speed: 0.20 → 0.25 m/s
-            duration = min(3.6, (clearance * 0.84) / 0.25)
+            duration = min(4.0, (clearance * 1.0) / 0.30)
             
             return {
                 'action': 'escape_backup',
                 'parameters': {
-                    'linear_velocity': -0.25,  # ⬆️ Was -0.20
+                    'linear_velocity': -0.30,  
                     'angular_velocity': 0.0,
                     'duration': duration
                 },
@@ -397,10 +397,10 @@ class LidarSafetyMonitor:
         - ESCAPE_SAFE_THRESHOLD = 0.35m (was 0.30, accounts for robot width + noise)
         - OBSTACLE_REJECTION_ARC = 45° (was 60°, tighter for differential drive)
         """
-        SAFE_THRESHOLD = SafetyThresholds.ESCAPE_SAFE_THRESHOLD  # ✅ 0.35m
-        OBSTACLE_REJECTION_ARC = SafetyThresholds.OBSTACLE_REJECTION_ARC  # ✅ 45°
+        SAFE_THRESHOLD = SafetyThresholds.ESCAPE_SAFE_THRESHOLD  
+        OBSTACLE_REJECTION_ARC = SafetyThresholds.OBSTACLE_REJECTION_ARC  
         
-        # ✅ Weight configuration (unchanged, but now documented)
+        # Weight configuration (unchanged, but now documented)
         W_CLEARANCE = 0.25  # Clearance distance (dominant)
         W_OBSTACLE  = 0.50  # Obstacle avoidance angle
         W_OPPOSITE  = 0.20  # Opposite direction bonus
@@ -415,6 +415,21 @@ class LidarSafetyMonitor:
         
         if not safe_sectors:
             return ('none', 0, 0.0)
+            
+        # Filter out cooldown sectors
+        filtered_by_cooldown = {}
+        for sector, clearance in safe_sectors.items():
+            # Check if this sector is on cooldown
+            if self.is_direction_on_cooldown(sector, tolerance=45):
+                logger.debug(f"[COOLDOWN FILTER] Sector {sector}° skipped (on cooldown)")
+                continue
+            
+            filtered_by_cooldown[sector] = clearance
+        
+        # If ALL safe sectors are on cooldown → use them anyway (emergency)
+        if not filtered_by_cooldown:
+            logger.warning("[COOLDOWN] All safe sectors on cooldown - using anyway")
+            filtered_by_cooldown = safe_sectors
         
         # Calculate directions
         normalized_obstacle = obstacle_angle_deg % 360
@@ -540,6 +555,13 @@ class LidarSafetyMonitor:
             f"[ESCAPE SELECTION] SELECTED: {best_sector}° "
             f"(clearance: {best_clearance:.2f}m, score: {best_score:.3f})"
         )
+
+        # Set cooldown for the selected sector
+        self.last_escape_sector = best_sector
+        self.last_escape_time = time.time()
+        
+        logger.warning(f"[COOLDOWN SET] Sector {best_sector}° blocked for "
+                  f"{self.directional_cooldown:.0f}s")
         
         # Map to action (giữ nguyên)
         if best_sector == 0:
@@ -872,8 +894,8 @@ class LidarSafetyMonitor:
                 distance_improvement = min_distance - self._escape_start_distance
                 improvement_ratio = distance_improvement / max(self._escape_start_distance, 0.1)
                 
-                # ✅ SUCCESS CHECK: Transition to COOLDOWN (NOT NORMAL)
-                if min_distance > self.thresholds.RESUME_SAFE:  # ← Tăng từ 0.6m → 0.8m
+                # ✅ SUCCESS CHECK: Cleared to safe distance
+                if min_distance > self.thresholds.RESUME_SAFE:  # 0.45m
                     logger.info(
                         f"[ESCAPE SUCCESS] ✓ Cleared to {min_distance:.2f}m "
                         f"after {elapsed:.1f}s (improved +{distance_improvement:.2f}m) "
@@ -892,7 +914,7 @@ class LidarSafetyMonitor:
                     if hasattr(self, '_alternative_attempted'):
                         delattr(self, '_alternative_attempted')
                     
-                    # Return PAUSE command (không cho forward trong COOLDOWN)
+                    # Return PAUSE command during cooldown
                     return {
                         'abort': False,
                         'command': self._pause_command(),
@@ -951,8 +973,8 @@ class LidarSafetyMonitor:
                                 'clearances': sector_clearances
                             }
                 
-                # ✅ TIMEOUT HANDLING (15s timeout)
-                if elapsed > self.escape_duration:  # ← 15s
+                # ✅ TIMEOUT HANDLING (8s timeout)
+                if elapsed > self.escape_duration:
                     logger.error(
                         f"[ESCAPE TIMEOUT] ✗ Failed after {elapsed:.1f}s "
                         f"(still at {min_distance:.2f}m, started at {self._escape_start_distance:.2f}m)"
@@ -997,41 +1019,7 @@ class LidarSafetyMonitor:
                             'clearances': sector_clearances
                         }
                     
-                    # FALLBACK 3: RETRY với hướng khác (theo yêu cầu Option A)
-                    if max_clearance > self.thresholds.ZONE_1_CRITICAL:
-                        logger.warning(
-                            f"[TIMEOUT RETRY] Retrying escape toward {max_sector}° "
-                            f"(clearance: {max_clearance:.2f}m)"
-                        )
-                        
-                        # Reset flags
-                        if hasattr(self, '_rotate_attempted'):
-                            delattr(self, '_rotate_attempted')
-                        if hasattr(self, '_alternative_attempted'):
-                            delattr(self, '_alternative_attempted')
-                        
-                        # Reset timer and retry
-                        self.escape_start_time = current_time
-                        self._escape_start_distance = min_distance
-                        
-                        # Generate new escape command
-                        action_type, target_sector, clearance = self._select_escape_direction(
-                            sector_clearances,
-                            0.0,
-                            obstacles[0][0] if obstacles else 0.0
-                        )
-                        
-                        return {
-                            'abort': True,
-                            'command': self._generate_escape_command(
-                                action_type, target_sector, clearance
-                            ),
-                            'min_distance': min_distance,
-                            'state': 'escape_retry',
-                            'clearances': sector_clearances
-                        }
-                    
-                    # FALLBACK 4: True deadlock → Nav2 rescue
+                    # FALLBACK 3: Nav2 rescue (last resort)
                     logger.error(
                         f"[TIMEOUT] Cannot escape locally "
                         f"(max clearance: {max_clearance:.2f}m at {max_sector}°)"
@@ -1059,7 +1047,7 @@ class LidarSafetyMonitor:
                 
                 # Still escaping - pause commands
                 logger.debug(
-                    f"[ESCAPING] {elapsed:.1f}s/{self.escape_duration:.1f}s, "
+                    f"[ESCAPING] {elapsed:.1f}s/8.0s, "
                     f"dist={min_distance:.2f}m (started: {self._escape_start_distance:.2f}m, "
                     f"improvement: {improvement_ratio:.1%})"
                 )
