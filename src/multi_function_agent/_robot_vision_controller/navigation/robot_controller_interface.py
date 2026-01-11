@@ -343,8 +343,7 @@ class RobotControllerInterface(Node):
         if lidar_to_check is None:
             return True
         
-        from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
-        safety_monitor = LidarSafetyMonitor()
+        safety_monitor = self.safety_monitor
         
         min_dist = safety_monitor.get_min_distance(lidar_to_check)
         
