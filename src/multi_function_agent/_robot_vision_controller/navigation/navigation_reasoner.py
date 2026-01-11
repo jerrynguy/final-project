@@ -796,7 +796,37 @@ class NavigationReasoner:
         # No clear paths available
         return self._handle_no_clear_paths(obstacles)
     
-
+    def _create_cooldown_rotation_command(self) -> Dict:
+        """Force rotation during cooldown để tìm escape direction."""
+        
+        # Rotate toward side with more clearance
+        if hasattr(self, '_last_vision_analysis'):
+            clearances = self._last_vision_analysis.get('clearances', {})
+            left = clearances.get('left', 0)
+            right = clearances.get('right', 0)
+            
+            if left > right:
+                angular_vel = 0.6  # Rotate left
+                direction = 'left'
+            else:
+                angular_vel = -0.6  # Rotate right
+                direction = 'right'
+        else:
+            # Fallback: rotate left
+            angular_vel = 0.6
+            direction = 'left'
+        
+        return {
+            'action': f'cooldown_rotate_{direction}',
+            'parameters': {
+                'linear_velocity': 0.0,
+                'angular_velocity': angular_vel,
+                'duration': 1.5
+            },
+            'confidence': 0.9,
+            'reason': 'cooldown_escape_rotation'
+        }
+    
     def decide_next_action(
         self,
         vision_analysis: Dict,
@@ -809,6 +839,11 @@ class NavigationReasoner:
         Main decision-making function for navigation.
         """
         current_time = time.time()
+
+        # ✅ NEW: Check cooldown forward block
+        if vision_analysis.get('forward_blocked'):
+            logger.warning("[COOLDOWN] Forward blocked - forcing rotation")
+            return self._create_cooldown_rotation_command()
         
         # Priority 1: Check LiDAR safety override FIRST
         if lidar_override and lidar_override.get('veto', False):
@@ -822,6 +857,9 @@ class NavigationReasoner:
         start_time = time.time()
         
         try:
+            # Cache for cooldown rotation
+            self._last_vision_analysis = vision_analysis
+
             # Priority 3: Execute mission directive or standard navigation
             if mission_directive:
                 if mission_directive.startswith('directional_'):

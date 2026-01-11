@@ -24,6 +24,7 @@ try:
     from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
     from tf_transformations import euler_from_quaternion
     from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
+    from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
     
     ROS_AVAILABLE = True
     
@@ -124,6 +125,7 @@ class RobotControllerInterface(Node):
     def __init__(self, config_path: str = None):
         # Get centralized ROS2 node (singleton)
         self.ros_node = get_ros2_node()
+        self.safety_monitor = LidarSafetyMonitor()
 
         if config_path is None:
             import os
@@ -438,6 +440,7 @@ class RobotControllerInterface(Node):
         Execute command with SINGLE critical abort check.
         """
         try:
+            
             logger.info(
                 f"Publishing: linear={twist.linear.x:.3f}, "
                 f"angular={twist.angular.z:.3f}, duration={duration:.2f}s"
@@ -448,9 +451,8 @@ class RobotControllerInterface(Node):
             iterations = int(duration / interval)
             
             # Simplified monitor - critical check only
-            from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
-            safety_monitor = LidarSafetyMonitor()
-            
+            safety_monitor = self.safety_monitor
+
             # Update safety monitor with current movement direction
             safety_monitor.update_movement_state(twist.linear.x, twist.angular.z)
             
@@ -470,8 +472,15 @@ class RobotControllerInterface(Node):
                             f"[ABORT] Critical distance {abort_result['min_distance']:.3f}m "
                             f"at {abort_result.get('obstacle_angle', 'N/A')}°"
                         )
-                        # Execute emergency backup
+
+                        # Đảm bảo subsequent abort checks biết robot đang backup/rotate
                         backup_cmd = abort_result['command']
+                        backup_params = backup_cmd['parameters']
+                        safety_monitor.update_movement_state(
+                            backup_params['linear_velocity'],
+                            backup_params['angular_velocity']
+                        )
+                        
                         for _ in range(10):
                             self.ros_node.publish_velocity(
                                 backup_cmd['parameters']['linear_velocity'],

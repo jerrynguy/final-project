@@ -76,34 +76,45 @@ class LidarSafetyMonitor:
     
     def _should_abort_for_obstacle(self, angle_deg: float, distance: float) -> bool:
         """
-        Smart abort decision using centralized thresholds.
+        DIRECTIONAL ABORT: Chỉ abort obstacles trên trajectory di chuyển.
         
-        Rules:
-        - Forward motion: strict front arc (±45°) uses CRITICAL_ABORT_FRONT
-        - Turning/stopped: wider arc (±90°) uses CRITICAL_ABORT
-        - Sides (>90°): lenient CRITICAL_ABORT_SIDE
+        NEW LOGIC:
+        - Pure forward: check front ±45° only
+        - Turning LEFT: check left hemisphere (0° to 180°)
+        - Turning RIGHT: check right hemisphere (0° to -180°)
+        - Stopped: check wider ±90°
         """
+        # Determine movement type
         is_forward = self._is_moving_forward()
+        is_turning_left = self.last_angular_velocity > 0.3
+        is_turning_right = self.last_angular_velocity < -0.3
         
-        if is_forward:
-            # Moving forward: strict front check
-            if abs(angle_deg) <= SafetyThresholds.FRONT_ARC_HALF_ANGLE:  # ±60°
-                critical_threshold = SafetyThresholds.CRITICAL_ABORT_FRONT  # 0.22m
+        # ✅ RULE 1: Pure forward movement - ignore sides
+        if is_forward and not (is_turning_left or is_turning_right):
+            if abs(angle_deg) <= 45:  # Front arc only
+                should_abort = distance < SafetyThresholds.CRITICAL_ABORT_FRONT
             else:
-                critical_threshold = SafetyThresholds.CRITICAL_ABORT_SIDE   # 0.15m
+                should_abort = False  # Ignore side obstacles when going straight
+        # ✅ RULE 2: Turning LEFT - check left hemisphere only
+        elif is_turning_left:
+            if 0 <= angle_deg <= 180:  # Left hemisphere
+                should_abort = distance < SafetyThresholds.CRITICAL_ABORT
+            else:
+                should_abort = False  # Ignore right side when turning left
+        # ✅ RULE 3: Turning RIGHT - check right hemisphere only
+        elif is_turning_right:
+            if -180 <= angle_deg <= 0:  # Right hemisphere
+                should_abort = distance < SafetyThresholds.CRITICAL_ABORT
+            else:
+                should_abort = False  # Ignore left side when turning right
+        # ✅ RULE 4: Stopped/slow - check wider arc
         else:
-            # Turning: check wider arc
-            if abs(angle_deg) <= SafetyThresholds.SIDE_ARC_HALF_ANGLE:  # ±90°
-                critical_threshold = SafetyThresholds.CRITICAL_ABORT  # 0.22m
-            else:
-                critical_threshold = SafetyThresholds.CRITICAL_ABORT_SIDE  # 0.15m
-        
-        should_abort = distance < critical_threshold
+            should_abort = (distance < SafetyThresholds.CRITICAL_ABORT and abs(angle_deg) <= 90)
         
         if should_abort:
             logger.debug(
                 f"[ABORT CHECK] angle={angle_deg:.1f}°, dist={distance:.3f}m, "
-                f"threshold={critical_threshold:.3f}m → ABORT"
+                f"movement={'forward' if is_forward else 'turning_left' if is_turning_left else 'turning_right' if is_turning_right else 'stopped'} → ABORT"
             )
         
         return should_abort
@@ -1115,7 +1126,8 @@ class LidarSafetyMonitor:
                     'abort': False,
                     'command': self._pause_command(),  # ← Continue pausing
                     'min_distance': min_distance,
-                    'state': 'cooldown'
+                    'state': 'cooldown',
+                    'forward_blocked': True
                 }
             
             # ========================================
