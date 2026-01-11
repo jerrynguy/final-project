@@ -318,7 +318,9 @@ async def _robot_vision_controller(
             logger.info("✅ Mission completed")
                     
     except Exception as e:
+        import traceback
         logger.error(f"❌ Control error: {e}")
+        logger.error(f"📋 Stack trace:\n{traceback.format_exc()}")  # ← THÊM DÒNG NÀY
         yield FunctionInfo.from_fn(
             ErrorHandlers.control_error(e, stream_url, is_yolo_ready()),
             description="Robot control failed"

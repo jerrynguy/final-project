@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": 1767954297.4809136,
+  "last_updated": 1768124096.7989628,
   "adjustments": [
     {
       "parameter": "SAFE_ZONE",
-      "value": 1.2,
-      "reasoning": "Current safety zone is too conservative, preventing robot from escaping. Reducing to 1.2m allows for more aggressive escape maneuvers while maintaining safety",
+      "value": 0.7,
+      "reasoning": "Current safety zone is too conservative, preventing robot from escaping. Reducing to 0.7m allows for more aggressive escape maneuvers while maintaining safety",
       "confidence": 0.85,
-      "applied_at": 1767954297.4807653
+      "applied_at": 1768124096.7988756
     }
   ]
 }

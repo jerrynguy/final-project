@@ -62,7 +62,7 @@ class LidarSafetyMonitor:
 
         self.last_escape_sector = None      # Last escape direction (0-330)
         self.last_escape_time = 0.0         # Timestamp of escape
-        self.directional_cooldown = 8.0     # Cooldown duration (seconds)
+        self.directional_cooldown = 4.0     # Cooldown duration (seconds)
     
     def update_movement_state(self, linear_vel: float, angular_vel: float):
         """Track current movement for directional abort logic."""
@@ -313,9 +313,9 @@ class LidarSafetyMonitor:
             return {
                 'action': 'escape_rotate_right',
                 'parameters': {
-                    'linear_velocity': 0.0,
+                    'linear_velocity': 0.15,
                     'angular_velocity': -0.8,
-                    'duration': 2.5  
+                    'duration': 3.5  
                 },
                 'reason': f'escape_rotate_right_{target_sector}deg'
             }
@@ -324,23 +324,23 @@ class LidarSafetyMonitor:
             return {
                 'action': 'escape_rotate_left',
                 'parameters': {
-                    'linear_velocity': 0.0,
+                    'linear_velocity': 0.15,
                     'angular_velocity': 0.8,  
-                    'duration': 2.5  
+                    'duration': 3.5  
                 },
                 'confidence': 0.9,
                 'reason': f'escape_rotate_left_{target_sector}deg'
             }
 
         elif action_type == 'backup':
-            # ⬆️ Increased backup speed: 0.20 → 0.25 m/s
-            duration = min(4.0, (clearance * 1.0) / 0.30)
+            duration = min(6.0, (clearance * 1.5) / 0.35)
+            angular_bias = 0.2 if clearance > 1.0 else 0.0
             
             return {
                 'action': 'escape_backup',
                 'parameters': {
                     'linear_velocity': -0.30,  
-                    'angular_velocity': 0.0,
+                    'angular_velocity': angular_bias,
                     'duration': duration
                 },
                 'reason': f'escape_backup_{clearance:.2f}m'
