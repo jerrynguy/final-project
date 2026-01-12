@@ -407,20 +407,15 @@ class LidarSafetyMonitor:
     ) -> Tuple[str, int, float]:
         """
         Select best escape direction using centralized thresholds.
-        
-        Updates:
-        - ESCAPE_SAFE_THRESHOLD = 0.35m (was 0.30, accounts for robot width + noise)
-        - OBSTACLE_REJECTION_ARC = 45° (was 60°, tighter for differential drive)
         """
         SAFE_THRESHOLD = SafetyThresholds.ESCAPE_SAFE_THRESHOLD  
         OBSTACLE_REJECTION_ARC = SafetyThresholds.OBSTACLE_REJECTION_ARC  
         
         # Weight configuration (unchanged, but now documented)
-        W_CLEARANCE = 0.25  # Clearance distance (dominant)
-        W_OBSTACLE  = 0.50  # Obstacle avoidance angle
+        W_CLEARANCE = 0.40  # Clearance distance (dominant)
+        W_OBSTACLE  = 0.40  # Obstacle avoidance angle
         W_OPPOSITE  = 0.20  # Opposite direction bonus
-        W_FORWARD   = 0.05  # Forward bias
-        
+
         # Filter safe sectors
         safe_sectors = {
             sector: clearance
@@ -528,27 +523,12 @@ class LidarSafetyMonitor:
                 360 - abs(sector - opposite_angle)
             )
             opposite_bonus = max(0.0, 1.0 - angle_to_opposite / 180.0)
-            
-            # Factor 4: Forward Bias [0.0-1.0]
-            if sector == 0:
-                forward_bias_score = 1.00  # Perfect forward
-            elif sector in [330, 30]:
-                forward_bias_score = 0.90  # ← TĂNG từ 0.85 (encourage slight turns)
-            elif sector in [300, 60]:
-                forward_bias_score = 0.70  # ← TĂNG từ 0.60 (moderate turns acceptable)
-            elif sector in [270, 90]:
-                forward_bias_score = 0.45  # ← TĂNG từ 0.40 (side movement less bad)
-            elif sector in [240, 120]:
-                forward_bias_score = 0.25  # ← TĂNG từ 0.20 (rear-side still possible)
-            else:  # 150, 180, 210
-                forward_bias_score = 0.05  # ← TĂNG từ 0.00 (backup as last resort, not impossible)
-            
+
             # ✅ WEIGHTED TOTAL với updated weights
             total_score = (
                 clearance_score * W_CLEARANCE +
                 obstacle_avoidance_score * W_OBSTACLE +
-                opposite_bonus * W_OPPOSITE +
-                forward_bias_score * W_FORWARD
+                opposite_bonus * W_OPPOSITE
             )
             
             scored_sectors.append((sector, clearance, total_score))
@@ -937,7 +917,7 @@ class LidarSafetyMonitor:
                         'state': 'cooldown_buffer'
                     }
                 
-                # ✅ EARLY FAILURE DETECTION (after 2s, no improvement)
+                # EARLY FAILURE DETECTION (after 2s, no improvement)
                 if elapsed > 2.0 and improvement_ratio < 0.1:
                     logger.warning(
                         f"[ESCAPE STALL] ⚠️ No improvement after {elapsed:.1f}s "
@@ -951,19 +931,19 @@ class LidarSafetyMonitor:
                         
                         sector_clearances = self._analyze_360_clearances(obstacles)
                         
-                        # Get second-best direction
-                        sorted_sectors = sorted(
+                        # Get second-best direction BY CLEARANCE (không qua scoring)
+                        sorted_by_clearance = sorted(
                             sector_clearances.items(),
                             key=lambda x: x[1],
                             reverse=True
                         )
                         
                         # Try second best if clearance >0.4m
-                        if len(sorted_sectors) >= 2 and sorted_sectors[1][1] > 0.4:
-                            alt_sector, alt_clearance = sorted_sectors[1]
+                        if len(sorted_by_clearance) >= 2 and sorted_by_clearance[1][1] > 0.4:
+                            alt_sector, alt_clearance = sorted_by_clearance[1]
                             
                             logger.warning(
-                                f"[ESCAPE STALL] Alternative: {alt_sector}° "
+                                f"[ESCAPE STALL] Alternative (2nd BEST CLEARANCE): {alt_sector}° "
                                 f"(clearance: {alt_clearance:.2f}m)"
                             )
                             
@@ -971,24 +951,38 @@ class LidarSafetyMonitor:
                             self.escape_start_time = current_time  # Reset timer
                             self._escape_start_distance = min_distance
                             
-                            # Generate alternative escape command
-                            action_type, target_sector, clearance = self._select_escape_direction(
-                                sector_clearances,
-                                0.0,
-                                obstacles[0][0] if obstacles else 0.0
+                            # FORCE sử dụng alternative sector (không qua scoring)
+                            # Map sector to action type
+                            if alt_sector == 0:
+                                action_type = 'forward'
+                            elif alt_sector == 30:
+                                action_type = 'turn_right'
+                            elif alt_sector == 330:
+                                action_type = 'turn_left'
+                            elif 60 <= alt_sector <= 150:
+                                action_type = 'rotate_right'
+                            elif 210 <= alt_sector <= 300:
+                                action_type = 'rotate_left'
+                            else:  # 180
+                                action_type = 'backup'
+                            
+                            logger.info(
+                                f"[ALTERNATIVE] Forcing action: {action_type} "
+                                f"toward {alt_sector}° (clearance: {alt_clearance:.2f}m)"
                             )
                             
                             return {
                                 'abort': True,
                                 'command': self._generate_escape_command(
-                                    action_type, target_sector, clearance
+                                    action_type, alt_sector, alt_clearance
                                 ),
                                 'min_distance': min_distance,
                                 'state': 'escape_alternative',
-                                'clearances': sector_clearances
+                                'clearances': sector_clearances,
+                                'force_execute': True 
                             }
                 
-                # ✅ TIMEOUT HANDLING (8s timeout)
+                # TIMEOUT HANDLING 
                 if elapsed > self.escape_duration:
                     logger.error(
                         f"[ESCAPE TIMEOUT] ✗ Failed after {elapsed:.1f}s "
@@ -1000,10 +994,10 @@ class LidarSafetyMonitor:
                     max_sector = max(sector_clearances, key=sector_clearances.get)
                     max_clearance = sector_clearances[max_sector]
                     
-                    # FALLBACK 2: Rotate rescue (if not attempted AND clearance >0.2m)
+                    # FALLBACK 2: Rotate + MOVE rescue (if not attempted AND clearance >0.2m)
                     if max_clearance > 0.20 and not hasattr(self, '_rotate_attempted'):
                         logger.warning(
-                            f"[TIMEOUT RESCUE] Attempting rotate toward {max_sector}° "
+                            f"[TIMEOUT RESCUE] Attempting rotate + MOVE toward {max_sector}° "
                             f"(clearance: {max_clearance:.2f}m)"
                         )
                         
@@ -1013,24 +1007,38 @@ class LidarSafetyMonitor:
                         angular_vel = 0.6 if max_sector <= 180 else -0.6
                         direction = 'left' if max_sector <= 180 else 'right'
                         
+                        # THÊM LINEAR VELOCITY để di chuyển ra khỏi góc
+                        # Chọn linear velocity dựa trên clearance
+                        if max_clearance > 0.5:
+                            linear_vel = 0.20  # Clearance tốt → di chuyển nhanh hơn
+                        elif max_clearance > 0.3:
+                            linear_vel = 0.15  # Clearance vừa → di chuyển vừa
+                        else:
+                            linear_vel = 0.10  # Clearance ít → di chuyển chậm
+                        
+                        logger.info(
+                            f"[TIMEOUT RESCUE] Linear: {linear_vel:.2f}m/s, "
+                            f"Angular: {angular_vel:.2f}rad/s"
+                        )
+                        
                         # Extend escape window for rescue attempt
                         self.escape_start_time = current_time
-                        self.escape_duration = 3.0
+                        self.escape_duration = 4.0  # ← TĂNG từ 3.0s (cần thời gian di chuyển)
                         
                         return {
                             'abort': True,
                             'command': {
-                                'action': f'timeout_rotate_rescue_{direction}',
+                                'action': f'timeout_rotate_move_rescue_{direction}',  # ← Đổi tên
                                 'parameters': {
-                                    'linear_velocity': 0.0,
+                                    'linear_velocity': linear_vel,  # ← THÊM linear
                                     'angular_velocity': angular_vel,
-                                    'duration': 2.0
+                                    'duration': 3.0  # ← TĂNG duration từ 2.0s
                                 },
-                                'reason': f'escape_timeout_rotate_rescue_{max_sector}deg',
+                                'reason': f'escape_timeout_rotate_move_rescue_{max_sector}deg',
                                 'force_execute': True
                             },
                             'min_distance': max_clearance,
-                            'state': 'timeout_rotate_rescue',
+                            'state': 'timeout_rotate_move_rescue',  # ← Đổi tên state
                             'clearances': sector_clearances
                         }
                     

@@ -1,20 +1,13 @@
 {
   "version": 1,
-  "last_updated": 1768177100.2474096,
+  "last_updated": 1768204747.7895687,
   "adjustments": [
     {
       "parameter": "SAFE_ZONE",
-      "value": 0.8,
-      "reasoning": "Current safe zone threshold is too cautious, preventing robot from resuming navigation after aborts. Increasing to 0.8m allows more flexibility in navigation.",
-      "confidence": 0.8,
-      "applied_at": 1768177100.2471962
-    },
-    {
-      "parameter": "RESUME_SAFE",
       "value": 0.7,
-      "reasoning": "Current resume safe threshold is too low, causing robot to fail to resume navigation. Increasing to 0.7m ensures robot has enough clearance to resume safely.",
+      "reasoning": "Decrease SAFE_ZONE to allow robot to exit safety mode and attempt escape maneuvers. Current value is too conservative, leading to deadlock.",
       "confidence": 0.85,
-      "applied_at": 1768177100.2472486
+      "applied_at": 1768204747.7894826
     }
   ]
 }

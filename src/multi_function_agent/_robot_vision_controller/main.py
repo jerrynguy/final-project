@@ -12,7 +12,7 @@ from multi_function_agent._robot_vision_controller.utils.log.performance_logger 
 from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator, SafetyThresholds
 
 from multi_function_agent._robot_vision_controller.perception.slam_controller import SLAMController
-from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
+from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor, SafetyState
 from multi_function_agent._robot_vision_controller.perception.rtsp_stream_handler import RTSPStreamHandler
 from multi_function_agent._robot_vision_controller.perception.robot_vision_analyzer import RobotVisionAnalyzer
 
@@ -468,6 +468,16 @@ async def run_robot_control_loop(
                     'reason': abort_result.get('reason', 'critical')
                 })
                 await asyncio.sleep(0.1)
+                continue
+
+            # ✅ FIX #1: THÊM CHECK NÀY - SKIP khi đang ESCAPE_WAIT hoặc COOLDOWN
+            current_safety_state = safety_monitor.state
+            if current_safety_state in [SafetyState.ESCAPE_WAIT, SafetyState.COOLDOWN]:
+                logger.debug(
+                    f"[MAIN LOOP] Skipping navigation - "
+                    f"safety state: {current_safety_state.value}"
+                )
+                await asyncio.sleep(0.05)
                 continue
 
             # STEP 2: Check if escape is taking too long

@@ -429,6 +429,7 @@ class RobotControllerInterface(Node):
             self.robot_status.state = RobotState.ERROR
             return False
 
+    # ✅ SAU:
     async def _send_command(
             self, 
             twist: Twist, 
@@ -445,6 +446,12 @@ class RobotControllerInterface(Node):
                 f"angular={twist.angular.z:.3f}, duration={duration:.2f}s"
             )
             
+            # ✅ FIX #2: Log force_execute TRƯỚC vòng lặp
+            if force_execute:
+                logger.warning(
+                    f"🔓 [FORCE MODE ENABLED] Bypassing ALL safety checks for {duration:.1f}s"
+                )
+            
             publish_rate = 20  # 20Hz
             interval = 1.0 / publish_rate
             iterations = int(duration / interval)
@@ -460,67 +467,70 @@ class RobotControllerInterface(Node):
             self._current_angular_vel = twist.angular.z
             
             for i in range(max(1, iterations)):
-                if not force_execute and self.lidar_data is not None:
-                    abort_result = safety_monitor.check_critical_abort(
-                        self.lidar_data,
-                        robot_pos=self.ros_node.get_robot_pose()
-                    )
-                    
-                    if abort_result['abort']:
-                        logger.error(
-                            f"[ABORT] Critical distance {abort_result['min_distance']:.3f}m "
-                            f"at {abort_result.get('obstacle_angle', 'N/A')}°"
-                        )
-
-                        # Đảm bảo subsequent abort checks biết robot đang backup/rotate
-                        backup_cmd = abort_result['command']
-                        backup_params = backup_cmd['parameters']
-                        safety_monitor.update_movement_state(
-                            backup_params['linear_velocity'],
-                            backup_params['angular_velocity']
+                # Chỉ check khi KHÔNG force
+                if not force_execute:  # ← BỎ "and self.lidar_data is not None"
+                    if self.lidar_data is None:
+                        logger.warning("[SAFETY CHECK] No LIDAR data - skipping abort check")
+                    else:
+                        abort_result = safety_monitor.check_critical_abort(
+                            self.lidar_data,
+                            robot_pos=self.ros_node.get_robot_pose()
                         )
                         
-                        for _ in range(10):
-                            self.ros_node.publish_velocity(
-                                backup_cmd['parameters']['linear_velocity'],
-                                backup_cmd['parameters']['angular_velocity']
-                            )
-                            await asyncio.sleep(0.05)
-
-                        await asyncio.sleep(0.5)
-                        
-                        return False
-                    
-                    # Extra rear monitoring if backing up
-                    if twist.linear.x < 0:  # Backing up
-                        rear_min = self._check_rear_clearance_during_backup(self.lidar_data)
-                        
-                        if rear_min is not None and rear_min < SafetyThresholds.CRITICAL_ABORT:
+                        if abort_result['abort']:
                             logger.error(
-                                f"[BACKUP ABORT] Rear collision imminent: {rear_min:.3f}m"
+                                f"[ABORT] Critical distance {abort_result['min_distance']:.3f}m "
+                                f"at {abort_result.get('obstacle_angle', 'N/A')}°"
                             )
-                            # Emergency stop
-                            for _ in range(5):
-                                self.ros_node.publish_stop()
-                                await asyncio.sleep(0.01)
+
+                            # Đảm bảo subsequent abort checks biết robot đang backup/rotate
+                            backup_cmd = abort_result['command']
+                            backup_params = backup_cmd['parameters']
+                            safety_monitor.update_movement_state(
+                                backup_params['linear_velocity'],
+                                backup_params['angular_velocity']
+                            )
+                            
+                            for _ in range(10):
+                                self.ros_node.publish_velocity(
+                                    backup_cmd['parameters']['linear_velocity'],
+                                    backup_cmd['parameters']['angular_velocity']
+                                )
+                                await asyncio.sleep(0.05)
+
+                            await asyncio.sleep(0.5)
+                            
                             return False
                         
-                if force_execute and i == 0:
-                    logger.warning(
-                        f"[FORCE EXECUTE] Bypassing safety checks for {duration:.1f}s"
-                    )
+                        # Extra rear monitoring if backing up
+                        if twist.linear.x < 0:  # Backing up
+                            rear_min = self._check_rear_clearance_during_backup(self.lidar_data)
+                            
+                            if rear_min is not None and rear_min < SafetyThresholds.CRITICAL_ABORT:
+                                logger.error(
+                                    f"[BACKUP ABORT] Rear collision imminent: {rear_min:.3f}m"
+                                )
+                                # Emergency stop
+                                for _ in range(5):
+                                    self.ros_node.publish_stop()
+                                    await asyncio.sleep(0.01)
+                                return False
+                
+                # Log mỗi lần publish (chỉ log 1 lần đầu)
+                if i == 0:
+                    if force_execute:
+                        logger.info(f"[FORCE MODE] Publishing without safety checks")
+                    else:
+                        logger.debug(f"[NORMAL MODE] Publishing with safety checks")
                 
                 # No velocity scaling - publish as-is
                 self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
                 await asyncio.sleep(interval)
             
             return True
-            
+        
         except Exception as e:
-            logger.error(f"Command execution failed: {e}")
-            for _ in range(5):
-                self.ros_node.publish_stop()
-                await asyncio.sleep(0.01)
+            logger.error(f"Command send failed: {e}")
             return False
 
     def _check_rear_clearance_during_backup(self, lidar_data) -> Optional[float]:
