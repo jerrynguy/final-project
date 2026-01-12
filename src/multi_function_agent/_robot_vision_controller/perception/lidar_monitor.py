@@ -72,16 +72,16 @@ class LidarSafetyMonitor:
     def _is_moving_forward(self) -> bool:
         """Check if robot is primarily moving forward (not turning)."""
         return (abs(self.last_linear_velocity) > 0.1 and 
-                abs(self.last_angular_velocity) < 0.3)
-    
+                abs(self.last_angular_velocity) < 0.6)
+
     def _should_abort_for_obstacle(self, angle_deg: float, distance: float) -> bool:
         """
         DIRECTIONAL ABORT: Chỉ abort obstacles trên trajectory di chuyển.
         
         NEW LOGIC:
         - Pure forward: check front ±45° only
-        - Turning LEFT: check left hemisphere (0° to 180°)
-        - Turning RIGHT: check right hemisphere (0° to -180°)
+        - Turning LEFT: check left hemisphere (0° to 180°) with directional thresholds
+        - Turning RIGHT: check right hemisphere (0° to -180°) with directional thresholds
         - Stopped: check wider ±90°
         """
         # Determine movement type
@@ -95,18 +95,33 @@ class LidarSafetyMonitor:
                 should_abort = distance < SafetyThresholds.CRITICAL_ABORT_FRONT
             else:
                 should_abort = False  # Ignore side obstacles when going straight
-        # ✅ RULE 2: Turning LEFT - check left hemisphere only
+        
+        # ✅ RULE 2: Turning LEFT - check left hemisphere with directional thresholds
         elif is_turning_left:
             if 0 <= angle_deg <= 180:  # Left hemisphere
-                should_abort = distance < SafetyThresholds.CRITICAL_ABORT
+                # ✅ NEW: Use directional thresholds
+                if abs(angle_deg) <= 60:  # Front-left arc (0° to 60°)
+                    threshold = SafetyThresholds.CRITICAL_ABORT_FRONT  # 0.22m (strict)
+                else:  # Side-left arc (60° to 180°)
+                    threshold = SafetyThresholds.CRITICAL_ABORT_SIDE   # 0.15m (lenient)
+                
+                should_abort = distance < threshold
             else:
-                should_abort = False  # Ignore right side when turning left
-        # ✅ RULE 3: Turning RIGHT - check right hemisphere only
+                should_abort = False  # Ignore right hemisphere when turning left
+        
+        # ✅ RULE 3: Turning RIGHT - check right hemisphere with directional thresholds
         elif is_turning_right:
             if -180 <= angle_deg <= 0:  # Right hemisphere
-                should_abort = distance < SafetyThresholds.CRITICAL_ABORT
+                # ✅ NEW: Use directional thresholds (symmetric with left)
+                if abs(angle_deg) <= 60:  # Front-right arc (-60° to 0°)
+                    threshold = SafetyThresholds.CRITICAL_ABORT_FRONT  # 0.22m (strict)
+                else:  # Side-right arc (-180° to -60°)
+                    threshold = SafetyThresholds.CRITICAL_ABORT_SIDE   # 0.15m (lenient)
+                
+                should_abort = distance < threshold
             else:
-                should_abort = False  # Ignore left side when turning right
+                should_abort = False  # Ignore left hemisphere when turning right
+        
         # ✅ RULE 4: Stopped/slow - check wider arc
         else:
             should_abort = (distance < SafetyThresholds.CRITICAL_ABORT and abs(angle_deg) <= 90)
