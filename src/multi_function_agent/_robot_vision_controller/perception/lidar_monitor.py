@@ -412,9 +412,9 @@ class LidarSafetyMonitor:
         OBSTACLE_REJECTION_ARC = SafetyThresholds.OBSTACLE_REJECTION_ARC  
         
         # Weight configuration
-        W_CLEARANCE = 0.40
+        W_CLEARANCE = 0.50
         W_OBSTACLE  = 0.40
-        W_OPPOSITE  = 0.20
+        W_OPPOSITE  = 0.10
 
         # Filter safe sectors
         safe_sectors = {
@@ -427,9 +427,6 @@ class LidarSafetyMonitor:
             return ('none', 0, 0.0)
         
         # Convert obstacle angle from RELATIVE (LiDAR frame) to ABSOLUTE (world frame)
-        # obstacle_angle_deg = góc relative từ robot (-180 to 180)
-        # current_heading_deg = robot orientation trong world frame (0-360)
-        # → obstacle_absolute = vị trí obstacle trong world frame
         obstacle_absolute = (current_heading_deg + obstacle_angle_deg) % 360
         
         # Calculate opposite direction trong absolute frame
@@ -455,7 +452,9 @@ class LidarSafetyMonitor:
             logger.warning("[COOLDOWN] All safe sectors on cooldown - using anyway")
             filtered_by_cooldown = safe_sectors
         
-        # Filter sectors pointing TOWARD obstacle (using ABSOLUTE angle)
+        # ================================================================
+        # FILTER 1: Remove sectors pointing TOWARD obstacle
+        # ================================================================
         filtered_sectors = {}
         rejected_sectors = []
         
@@ -471,18 +470,57 @@ class LidarSafetyMonitor:
                 rejected_sectors.append((sector, angle_to_obstacle))
                 logger.debug(
                     f"[ESCAPE FILTER] Rejected sector {sector}° "
-                    f"(too close to obstacle at {obstacle_absolute:.0f}°, "  # ← ĐỔI
+                    f"(too close to obstacle at {obstacle_absolute:.0f}°, "
                     f"angle_diff={angle_to_obstacle:.0f}°)"
                 )
                 continue
             
             filtered_sectors[sector] = clearance
 
+        # ================================================================
+        # 🆕 FILTER 2: Prefer lateral escape over backup if better option exists
+        # ================================================================
+        if 180 in filtered_sectors:
+            backup_clearance = filtered_sectors[180]
+            
+            # Collect lateral escape options (NOT front 0-60° or back 150-210°)
+            # Left arc: 60-150°, Right arc: 210-300°
+            lateral_sectors = {
+                sector: clearance 
+                for sector, clearance in filtered_sectors.items()
+                if (60 <= sector <= 150) or (210 <= sector <= 300)
+            }
+            
+            if lateral_sectors:
+                # Find best lateral clearance
+                best_lateral_sector = max(lateral_sectors, key=lateral_sectors.get)
+                best_lateral_clearance = lateral_sectors[best_lateral_sector]
+                
+                # Threshold: Only use backup if NO lateral option has >1.0m clearance
+                LATERAL_PREFERENCE_THRESHOLD = 1.0  # meters
+                
+                if best_lateral_clearance > LATERAL_PREFERENCE_THRESHOLD:
+                    logger.info(
+                        f"[BACKUP FILTER] Lateral escape preferred: "
+                        f"Sector {best_lateral_sector}° ({best_lateral_clearance:.2f}m) "
+                        f"vs Backup 180° ({backup_clearance:.2f}m) "
+                        f"→ Removing backup from candidates"
+                    )
+                    
+                    # Remove backup from consideration
+                    del filtered_sectors[180]
+                else:
+                    logger.debug(
+                        f"[BACKUP FILTER] Keeping backup: "
+                        f"Best lateral {best_lateral_clearance:.2f}m < {LATERAL_PREFERENCE_THRESHOLD}m threshold"
+                    )
+        # ================================================================
+
         # Log filtering results
         if rejected_sectors:
             logger.warning(
                 f"[ESCAPE FILTER] Rejected {len(rejected_sectors)} sectors "
-                f"pointing toward obstacle at {obstacle_absolute:.0f}°:"  # ← ĐỔI
+                f"pointing toward obstacle at {obstacle_absolute:.0f}°:"
             )
             for sector, angle_diff in rejected_sectors[:3]:
                 logger.warning(f"  • {sector}° (angle_diff={angle_diff:.0f}°)")
@@ -491,7 +529,7 @@ class LidarSafetyMonitor:
         if not filtered_sectors:
             logger.error(
                 f"[ESCAPE FILTER] ⚠️  ALL safe sectors rejected! "
-                f"Obstacle at {obstacle_absolute:.0f}°"  # ← ĐỔI
+                f"Obstacle at {obstacle_absolute:.0f}°"
             )
             logger.error(
                 f"[ESCAPE FILTER] Emergency fallback: using opposite direction"
@@ -514,7 +552,7 @@ class LidarSafetyMonitor:
                     f"(best clearance: {best_safe[1]:.2f}m, may point toward obstacle!)"
                 )
 
-        # ✅ FIX #4: Score sectors using ABSOLUTE angles
+        # ✅ Score sectors using ABSOLUTE angles
         scored_sectors = []
         
         for sector, clearance in filtered_sectors.items():
@@ -523,14 +561,14 @@ class LidarSafetyMonitor:
             
             # Factor 2: Obstacle Avoidance [0.0-1.0] - using ABSOLUTE angle
             angle_diff = min(
-                abs(sector - obstacle_absolute),  # ← ĐỔI
+                abs(sector - obstacle_absolute),
                 360 - abs(sector - obstacle_absolute)
             )
             obstacle_avoidance_score = angle_diff / 180.0
 
             # Factor 3: Opposite Bonus [0.0-1.0] - using ABSOLUTE opposite
             angle_to_opposite = min(
-                abs(sector - opposite_angle),  # ← ĐỔI (đã đúng từ trước)
+                abs(sector - opposite_angle),
                 360 - abs(sector - opposite_angle)
             )
             opposite_bonus = max(0.0, 1.0 - angle_to_opposite / 180.0)
@@ -854,6 +892,54 @@ class LidarSafetyMonitor:
             return True
         
         return False
+    
+    def _get_sector_distance(self, lidar_data, sector_deg: int) -> Optional[float]:
+        """
+        Get LiDAR distance at specific sector (with ±5° tolerance).
+        """
+        if lidar_data is None:
+            return None
+        
+        try:
+            ranges = lidar_data.ranges
+            angle_min = lidar_data.angle_min
+            angle_increment = lidar_data.angle_increment
+            
+            # Convert sector to radians
+            sector_rad = np.radians(sector_deg)
+            
+            # Normalize to [-π, π]
+            while sector_rad > np.pi:
+                sector_rad -= 2 * np.pi
+            while sector_rad < -np.pi:
+                sector_rad += 2 * np.pi
+            
+            # Find readings within ±5° of sector
+            tolerance = np.radians(5)
+            sector_readings = []
+            
+            for i, distance in enumerate(ranges):
+                if np.isnan(distance) or np.isinf(distance):
+                    continue
+                
+                angle_rad = angle_min + (i * angle_increment)
+                
+                # Check if within tolerance
+                angle_diff = abs(angle_rad - sector_rad)
+                if angle_diff > np.pi:
+                    angle_diff = 2 * np.pi - angle_diff
+                
+                if angle_diff < tolerance:
+                    sector_readings.append(distance)
+            
+            if not sector_readings:
+                return None
+            
+            return min(sector_readings)
+            
+        except Exception as e:
+            logger.debug(f"Failed to get sector distance: {e}")
+            return None
 
     def check_critical_abort(
         self,
@@ -900,33 +986,83 @@ class LidarSafetyMonitor:
                 distance_improvement = min_distance - self._escape_start_distance
                 improvement_ratio = distance_improvement / max(self._escape_start_distance, 0.1)
                 
-                # ✅ SUCCESS CHECK: Cleared to safe distance
-                if min_distance > self.thresholds.RESUME_SAFE:  # 0.45m
-                    logger.info(
-                        f"[ESCAPE SUCCESS] ✓ Cleared to {min_distance:.2f}m "
-                        f"after {elapsed:.1f}s (improved +{distance_improvement:.2f}m) "
-                        f"→ COOLDOWN"
-                    )
+                # ================================================================
+                # ✅ SUCCESS CHECK: Check clearance in ESCAPE DIRECTION (not global)
+                # ================================================================
+                escape_sector = getattr(self, 'last_escape_sector', None)
+                
+                if escape_sector is not None:
+                    # Get clearance in escape direction (±30° tolerance)
+                    escape_clearances = []
                     
-                    # Transition to COOLDOWN state
-                    self.state = SafetyState.COOLDOWN
-                    self.cooldown_start_time = current_time
+                    for offset in [-30, 0, 30]:  # Check ±30° arc around escape direction
+                        check_sector = (escape_sector + offset) % 360
+                        
+                        # Get distance at this angle from current scan
+                        sector_distance = self._get_sector_distance(lidar_data, check_sector)
+                        if sector_distance:
+                            escape_clearances.append(sector_distance)
                     
-                    # Cleanup tracking variables
-                    if hasattr(self, '_escape_start_distance'):
-                        delattr(self, '_escape_start_distance')
-                    if hasattr(self, '_rotate_attempted'):
-                        self._rotate_attempted = False
-                    if hasattr(self, '_alternative_attempted'):
-                        delattr(self, '_alternative_attempted')
+                    # Success = clearance in escape direction > threshold
+                    if escape_clearances:
+                        escape_min = min(escape_clearances)
+                        
+                        if escape_min > self.thresholds.RESUME_SAFE:  # 0.45m in ESCAPE direction
+                            logger.info(
+                                f"[ESCAPE SUCCESS] ✓ Escape direction ({escape_sector}°) cleared to {escape_min:.2f}m "
+                                f"(global min: {min_distance:.2f}m) after {elapsed:.1f}s → COOLDOWN"
+                            )
+                            
+                            # Transition to COOLDOWN state
+                            self.state = SafetyState.COOLDOWN
+                            self.cooldown_start_time = current_time
+                            
+                            # Cleanup tracking variables
+                            if hasattr(self, '_escape_start_distance'):
+                                delattr(self, '_escape_start_distance')
+                            if hasattr(self, '_rotate_attempted'):
+                                self._rotate_attempted = False
+                            if hasattr(self, '_alternative_attempted'):
+                                delattr(self, '_alternative_attempted')
+                            
+                            # Return PAUSE command during cooldown
+                            return {
+                                'abort': False,
+                                'command': self._pause_command(),
+                                'min_distance': min_distance,
+                                'state': 'cooldown_buffer'
+                            }
+                else:
+                    # Fallback: No escape sector tracked, use global min (old behavior)
+                    logger.warning("[ESCAPE_WAIT] No escape sector tracked, using global min")
                     
-                    # Return PAUSE command during cooldown
-                    return {
-                        'abort': False,
-                        'command': self._pause_command(),
-                        'min_distance': min_distance,
-                        'state': 'cooldown_buffer'
-                    }
+                    if min_distance > self.thresholds.RESUME_SAFE:
+                        logger.info(
+                            f"[ESCAPE SUCCESS] ✓ Cleared to {min_distance:.2f}m "
+                            f"after {elapsed:.1f}s (improved +{distance_improvement:.2f}m) "
+                            f"→ COOLDOWN"
+                        )
+                        
+                        # Transition to COOLDOWN state
+                        self.state = SafetyState.COOLDOWN
+                        self.cooldown_start_time = current_time
+                        
+                        # Cleanup tracking variables
+                        if hasattr(self, '_escape_start_distance'):
+                            delattr(self, '_escape_start_distance')
+                        if hasattr(self, '_rotate_attempted'):
+                            self._rotate_attempted = False
+                        if hasattr(self, '_alternative_attempted'):
+                            delattr(self, '_alternative_attempted')
+                        
+                        # Return PAUSE command during cooldown
+                        return {
+                            'abort': False,
+                            'command': self._pause_command(),
+                            'min_distance': min_distance,
+                            'state': 'cooldown_buffer'
+                        }
+                # ================================================================
                 
                 # EARLY FAILURE DETECTION (after 2s, no improvement)
                 if elapsed > 2.0 and improvement_ratio < 0.1:
@@ -1197,5 +1333,4 @@ class LidarSafetyMonitor:
                 'command': self._emergency_stop(),
                 'min_distance': 0.0,
                 'state': 'error'
-            }     
-        
+            }
