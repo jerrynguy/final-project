@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": 1768204747.7895687,
+  "last_updated": 1768266812.4452453,
   "adjustments": [
     {
-      "parameter": "SAFE_ZONE",
-      "value": 0.7,
-      "reasoning": "Decrease SAFE_ZONE to allow robot to exit safety mode and attempt escape maneuvers. Current value is too conservative, leading to deadlock.",
+      "parameter": "RESUME_SAFE",
+      "value": 0.5,
+      "reasoning": "Decrease resume safe distance to allow robot to exit safety mode and resume navigation when it's safe to do so. Current value is too conservative, leading to deadlock.",
       "confidence": 0.85,
-      "applied_at": 1768204747.7894826
+      "applied_at": 1768266812.4451017
     }
   ]
 }

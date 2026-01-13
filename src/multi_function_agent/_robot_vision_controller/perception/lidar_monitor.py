@@ -307,7 +307,7 @@ class LidarSafetyMonitor:
                 'parameters': {
                     'linear_velocity': 0.30,  
                     'angular_velocity': -0.5,
-                    'duration': 3.5
+                    'duration': 1.5
                 },
                 'reason': f'escape_turn_right_{target_sector}deg'
             }
@@ -318,7 +318,7 @@ class LidarSafetyMonitor:
                 'parameters': {
                     'linear_velocity': 0.30,  
                     'angular_velocity': 0.5,
-                    'duration': 3.5  
+                    'duration': 1.5  
                 },
                 'reason': f'escape_turn_left_{target_sector}deg'
             }
@@ -330,7 +330,7 @@ class LidarSafetyMonitor:
                 'parameters': {
                     'linear_velocity': 0.15,
                     'angular_velocity': -0.8,
-                    'duration': 3.5  
+                    'duration': 1.5  
                 },
                 'reason': f'escape_rotate_right_{target_sector}deg'
             }
@@ -341,7 +341,7 @@ class LidarSafetyMonitor:
                 'parameters': {
                     'linear_velocity': 0.15,
                     'angular_velocity': 0.8,  
-                    'duration': 3.5  
+                    'duration': 1.5  
                 },
                 'confidence': 0.9,
                 'reason': f'escape_rotate_left_{target_sector}deg'
@@ -411,10 +411,10 @@ class LidarSafetyMonitor:
         SAFE_THRESHOLD = SafetyThresholds.ESCAPE_SAFE_THRESHOLD  
         OBSTACLE_REJECTION_ARC = SafetyThresholds.OBSTACLE_REJECTION_ARC  
         
-        # Weight configuration (unchanged, but now documented)
-        W_CLEARANCE = 0.40  # Clearance distance (dominant)
-        W_OBSTACLE  = 0.40  # Obstacle avoidance angle
-        W_OPPOSITE  = 0.20  # Opposite direction bonus
+        # Weight configuration
+        W_CLEARANCE = 0.40
+        W_OBSTACLE  = 0.40
+        W_OPPOSITE  = 0.20
 
         # Filter safe sectors
         safe_sectors = {
@@ -425,35 +425,45 @@ class LidarSafetyMonitor:
         
         if not safe_sectors:
             return ('none', 0, 0.0)
-            
+        
+        # Convert obstacle angle from RELATIVE (LiDAR frame) to ABSOLUTE (world frame)
+        # obstacle_angle_deg = góc relative từ robot (-180 to 180)
+        # current_heading_deg = robot orientation trong world frame (0-360)
+        # → obstacle_absolute = vị trí obstacle trong world frame
+        obstacle_absolute = (current_heading_deg + obstacle_angle_deg) % 360
+        
+        # Calculate opposite direction trong absolute frame
+        opposite_angle = (obstacle_absolute + 180) % 360
+        
+        # ADDED: Debug logging để verify conversion
+        logger.debug(
+            f"[ESCAPE DEBUG] Obstacle conversion: "
+            f"relative={obstacle_angle_deg:.1f}° + heading={current_heading_deg:.1f}° "
+            f"→ absolute={obstacle_absolute:.1f}°, opposite={opposite_angle:.1f}°"
+        )
+        
         # Filter out cooldown sectors
         filtered_by_cooldown = {}
         for sector, clearance in safe_sectors.items():
-            # Check if this sector is on cooldown
             if self.is_direction_on_cooldown(sector, tolerance=45):
                 logger.debug(f"[COOLDOWN FILTER] Sector {sector}° skipped (on cooldown)")
                 continue
             
             filtered_by_cooldown[sector] = clearance
         
-        # If ALL safe sectors are on cooldown → use them anyway (emergency)
         if not filtered_by_cooldown:
             logger.warning("[COOLDOWN] All safe sectors on cooldown - using anyway")
             filtered_by_cooldown = safe_sectors
         
-        # Calculate directions
-        normalized_obstacle = obstacle_angle_deg % 360
-        opposite_angle = (normalized_obstacle + 180) % 360
-        
-        # Filter out sectors that point TOWARD obstacle
+        # Filter sectors pointing TOWARD obstacle (using ABSOLUTE angle)
         filtered_sectors = {}
         rejected_sectors = []
         
-        for sector, clearance in safe_sectors.items():
-            # Calculate angular distance to obstacle
+        for sector, clearance in filtered_by_cooldown.items():
+            # Calculate angular distance to obstacle trong absolute frame
             angle_to_obstacle = min(
-                abs(sector - normalized_obstacle),
-                360 - abs(sector - normalized_obstacle)
+                abs(sector - obstacle_absolute), 
+                360 - abs(sector - obstacle_absolute)
             )
             
             # Reject if within danger arc of obstacle direction
@@ -461,7 +471,7 @@ class LidarSafetyMonitor:
                 rejected_sectors.append((sector, angle_to_obstacle))
                 logger.debug(
                     f"[ESCAPE FILTER] Rejected sector {sector}° "
-                    f"(too close to obstacle at {normalized_obstacle:.0f}°, "
+                    f"(too close to obstacle at {obstacle_absolute:.0f}°, "  # ← ĐỔI
                     f"angle_diff={angle_to_obstacle:.0f}°)"
                 )
                 continue
@@ -472,22 +482,22 @@ class LidarSafetyMonitor:
         if rejected_sectors:
             logger.warning(
                 f"[ESCAPE FILTER] Rejected {len(rejected_sectors)} sectors "
-                f"pointing toward obstacle at {normalized_obstacle:.0f}°:"
+                f"pointing toward obstacle at {obstacle_absolute:.0f}°:"  # ← ĐỔI
             )
-            for sector, angle_diff in rejected_sectors[:3]:  # Show first 3
+            for sector, angle_diff in rejected_sectors[:3]:
                 logger.warning(f"  • {sector}° (angle_diff={angle_diff:.0f}°)")
 
-        # Check if all sectors were rejected
+        # Check if all sectors rejected
         if not filtered_sectors:
             logger.error(
                 f"[ESCAPE FILTER] ⚠️  ALL safe sectors rejected! "
-                f"Obstacle at {normalized_obstacle:.0f}°"
+                f"Obstacle at {obstacle_absolute:.0f}°"  # ← ĐỔI
             )
             logger.error(
                 f"[ESCAPE FILTER] Emergency fallback: using opposite direction"
             )
             
-            # Try opposite direction even if it was rejected
+            # Try opposite direction even if rejected
             opposite_sector = int(opposite_angle // 30) * 30
             if opposite_sector in safe_sectors:
                 filtered_sectors = {opposite_sector: safe_sectors[opposite_sector]}
@@ -504,27 +514,28 @@ class LidarSafetyMonitor:
                     f"(best clearance: {best_safe[1]:.2f}m, may point toward obstacle!)"
                 )
 
+        # ✅ FIX #4: Score sectors using ABSOLUTE angles
         scored_sectors = []
         
         for sector, clearance in filtered_sectors.items():
             # Factor 1: Clearance Score [0.0-1.0]
             clearance_score = min(clearance / 3.5, 1.0)
             
-            # Factor 2: Obstacle Avoidance [0.0-1.0]
+            # Factor 2: Obstacle Avoidance [0.0-1.0] - using ABSOLUTE angle
             angle_diff = min(
-                abs(sector - normalized_obstacle),
-                360 - abs(sector - normalized_obstacle)
+                abs(sector - obstacle_absolute),  # ← ĐỔI
+                360 - abs(sector - obstacle_absolute)
             )
             obstacle_avoidance_score = angle_diff / 180.0
 
-            # Factor 3: Opposite Bonus [0.0-1.0] - SMOOTH GRADIENT
+            # Factor 3: Opposite Bonus [0.0-1.0] - using ABSOLUTE opposite
             angle_to_opposite = min(
-                abs(sector - opposite_angle),
+                abs(sector - opposite_angle),  # ← ĐỔI (đã đúng từ trước)
                 360 - abs(sector - opposite_angle)
             )
             opposite_bonus = max(0.0, 1.0 - angle_to_opposite / 180.0)
 
-            # ✅ WEIGHTED TOTAL với updated weights
+            # Weighted total
             total_score = (
                 clearance_score * W_CLEARANCE +
                 obstacle_avoidance_score * W_OBSTACLE +
@@ -551,14 +562,14 @@ class LidarSafetyMonitor:
             f"(clearance: {best_clearance:.2f}m, score: {best_score:.3f})"
         )
 
-        # Set cooldown for the selected sector
+        # Set cooldown for selected sector
         self.last_escape_sector = best_sector
         self.last_escape_time = time.time()
         
         logger.warning(f"[COOLDOWN SET] Sector {best_sector}° blocked for "
-                  f"{self.directional_cooldown:.0f}s")
+                f"{self.directional_cooldown:.0f}s")
         
-        # Map to action (giữ nguyên)
+        # Map to action (unchanged)
         if best_sector == 0:
             action = 'forward'
         elif best_sector == 30:
