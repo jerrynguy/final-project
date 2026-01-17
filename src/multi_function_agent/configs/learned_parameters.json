@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": 1768268572.705935,
+  "last_updated": 1768366354.30929,
   "adjustments": [
     {
       "parameter": "SAFE_ZONE",
-      "value": 1.0,
-      "reasoning": "Current safety zone is too conservative, preventing robot from escaping. Reducing to 1.0m allows for more aggressive escape maneuvers while maintaining safety",
+      "value": 0.8,
+      "reasoning": "Decrease safe zone radius to allow robot to navigate through narrower spaces, while still maintaining a safe distance from obstacles",
       "confidence": 0.85,
-      "applied_at": 1768268572.7057118
+      "applied_at": 1768366354.3091981
     }
   ]
 }

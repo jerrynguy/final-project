@@ -20,38 +20,54 @@ class SafetyThresholds:
     """
     🚨 SINGLE SOURCE OF TRUTH - ALL modules MUST import from here!
     
-    Design philosophy:
-    - Conservative abort (0.22m) protects hardware
-    - Generous escape threshold (0.35m) accounts for sensor noise + robot width
-    - Tight rejection arc (45°) maximizes escape options for differential drive
+    Design philosophy (AGGRESSIVE - Optimized for TurtleBot3):
+    - Hardware protection: 0.12m (physical collision)
+    - Critical abort: 0.25m (emergency stop)
+    - Safe operation: 0.40m+ (normal movement)
     """
     
-    # ===== HARDWARE & CRITICAL ABORT =====
+    # ===== HARDWARE PROTECTION =====
     HARDWARE_LIMIT = 0.12           # Physical collision distance (never breach)
-    CRITICAL_ABORT = 0.25           # ⬆️ Emergency backup trigger (was 0.20)
-    CRITICAL_ABORT_FRONT = 0.22     # Frontal critical (±45° arc)
-    CRITICAL_ABORT_SIDE = 0.15      # Side obstacle (±90°-180° arc)
-    RESUME_SAFE = 0.6              # ⬆️ Hysteresis resume 
+    
+    # ===== CRITICAL ABORT (Emergency Stop) =====
+    CRITICAL_ABORT = 0.25           # Emergency stop trigger (all directions)
+    CRITICAL_ABORT_FRONT = 0.22     # Frontal (±45° arc) - slightly tighter
+    CRITICAL_ABORT_SIDE = 0.15      # Side (±90-180° arc) - more lenient
+
+    # ===== SAFE OPERATION ZONES =====
+    RESUME_SAFE = 0.50              # Resume after abort (hysteresis)
+    ESCAPE_SAFE_THRESHOLD = 0.40    # ✅ CHANGED: 0.50 → 0.40 (more aggressive)
     
     # ===== NAVIGATION ZONES (for NavigationReasoner) =====
-    ZONE_1_CRITICAL = 0.30          # Zone 1: <0.4m → rotate/backup only
-    ZONE_2_MEDIUM = 0.80            # Zone 2: 0.4-0.8m → slow + aggressive steer
-    ZONE_3_FAR = 1.50               # Zone 3: >0.8m → normal speed + frontier guidance
+    # ✅ VERY AGGRESSIVE: TurtleBot3 can navigate tight spaces
+    ZONE_0_EMERGENCY = 0.30         # Emergency rotate/backup only (unchanged)
+    ZONE_1_PAUSE = 0.40             
+    ZONE_2_CAUTION = 0.50           
+    ZONE_3_COMFORTABLE = 0.80       
     
     # ===== LEGACY ALIASES (backward compatibility) =====
-    WARNING_ZONE = ZONE_1_CRITICAL  # 0.40m
-    CAUTION_ZONE = ZONE_2_MEDIUM    # 0.80m
-    SAFE_ZONE = ZONE_3_FAR          # 1.50m
+    ZONE_1_CRITICAL = ZONE_0_EMERGENCY  
+    ZONE_2_MEDIUM = ZONE_2_CAUTION      
+    ZONE_3_FAR = ZONE_3_COMFORTABLE     
+    
+    WARNING_ZONE = ZONE_1_PAUSE         
+    CAUTION_ZONE = ZONE_2_CAUTION       
+    SAFE_ZONE = ZONE_3_COMFORTABLE      
     
     # ===== ESCAPE SYSTEM =====
-    ESCAPE_SAFE_THRESHOLD = 0.40    # ⬆️ Min clearance for escape sector (was 0.30)
-                                     # Rationale: Robot width ~0.3m + sensor noise margin
     OBSTACLE_REJECTION_ARC = 45     # ±45° arc for obstacle rejection
-                                     # Rationale: Differential drive can rotate in-place
+    
+    # ===== BACKUP SAFETY =====
+    MIN_SAFE_BACKUP_CLEARANCE = 0.40    # ✅ CHANGED: 0.50 → 0.40 (more aggressive)
+    BACKUP_ABORT_THRESHOLD = 0.25       # Emergency stop during backup execution
+    BACKUP_CHECK_ARC = 30               # ±30° arc for rear validation
+    
+    # ===== LATERAL ESCAPE PREFERENCE =====
+    LATERAL_PREFERENCE_THRESHOLD = 0.40  # ✅ CHANGED: 0.50 → 0.40 (prefer lateral)
     
     # ===== VELOCITY LIMITS =====
-    MAX_SAFE_LINEAR_VEL = 0.6
-    MAX_SAFE_ANGULAR_VEL = 2.5
+    MAX_SAFE_LINEAR_VEL = 0.6       # Maximum linear velocity (m/s)
+    MAX_SAFE_ANGULAR_VEL = 2.5      # Maximum angular velocity (rad/s)
     
     # ===== DIRECTIONAL ARC DEFINITIONS =====
     FRONT_ARC_HALF_ANGLE = 60       # ±60° = 120° frontal cone
@@ -59,8 +75,6 @@ class SafetyThresholds:
     
     # ===== REAR ARC SAFETY =====
     REAR_ARC_ANGLE = 120            # Rear arc starts at ±120°
-    MIN_SAFE_BACKUP_CLEARANCE = 0.25  # Min rear distance to allow backup
-    BACKUP_ABORT_THRESHOLD = 0.20   # Emergency stop during backup
     
     # ===== RECOVERY BEHAVIOR =====
     TIGHT_CORNER_THRESHOLD = 0.3    # If both L/R < 0.3m → rotate-only
@@ -75,13 +89,13 @@ class SafetyThresholds:
         if is_moving_forward:
             # Forward movement: strict front, lenient sides
             if abs_angle <= cls.FRONT_ARC_HALF_ANGLE:
-                return cls.CRITICAL_ABORT_FRONT  # 0.20m in front ±60°
+                return cls.CRITICAL_ABORT_FRONT  # 0.22m in front ±60°
             else:
-                return cls.CRITICAL_ABORT_SIDE   # 0.15m on sides (only emergency)
+                return cls.CRITICAL_ABORT_SIDE   # 0.15m on sides
         else:
             # Turning/stopped: check wider arc
             if abs_angle <= cls.SIDE_ARC_HALF_ANGLE:
-                return cls.CRITICAL_ABORT_FRONT  # 0.20m in front ±90°
+                return cls.CRITICAL_ABORT_FRONT  # 0.22m in front ±90°
             else:
                 return cls.CRITICAL_ABORT_SIDE   # 0.15m behind
 
@@ -104,14 +118,10 @@ class SafetyValidator:
     
     def __init__(self):
         """Initialize safety validator with centralized thresholds."""
-        # Reference centralized thresholds instead of local copies
         self.thresholds = SafetyThresholds
-        
-        # Statistics tracking
         self.total_checks = 0
         self.unsafe_detections = 0
 
-    # CHANGED: Properties now reference SafetyThresholds
     @property
     def EMERGENCY_DISTANCE(self):
         return self.thresholds.HARDWARE_LIMIT
@@ -122,12 +132,10 @@ class SafetyValidator:
     
     @property
     def CRITICAL_DISTANCE_EXPLORE(self):
-        # REMOVED: No mode-specific overrides
         return self.thresholds.CRITICAL_ABORT
     
     @property
     def CRITICAL_DISTANCE_PATROL(self):
-        # REMOVED: No mode-specific overrides
         return self.thresholds.CRITICAL_ABORT
 
     @property  
@@ -147,9 +155,7 @@ class SafetyValidator:
         return self.thresholds.MAX_SAFE_ANGULAR_VEL
     
     def validate_movement_command(self, movement_decision: Dict[str, Any]) -> bool:
-        """
-        Validate navigation command for safety compliance.
-        """
+        """Validate navigation command for safety compliance."""
         self.total_checks += 1
         
         try:
@@ -158,7 +164,6 @@ class SafetyValidator:
             linear_vel = params.get('linear_velocity', 0.0)
             angular_vel = params.get('angular_velocity', 0.0)
             
-            # Validate velocity limits
             if not self._check_velocity_limits(linear_vel, angular_vel):
                 self.unsafe_detections += 1
                 logger.warning(
@@ -167,7 +172,6 @@ class SafetyValidator:
                 )
                 return False
             
-            # Emergency actions and stops are always safe
             if 'emergency' in action or action == 'stop':
                 return True
             
@@ -179,18 +183,13 @@ class SafetyValidator:
             return False
     
     def _check_velocity_limits(self, linear_vel: float, angular_vel: float) -> bool:
-        """
-        Check if velocities are within safe limits.
-        """
-        # Check for NaN/Inf
+        """Check if velocities are within safe limits."""
         if not math.isfinite(linear_vel) or not math.isfinite(angular_vel):
             return False
         
-        # Sanity check: reasonable range bounds
         if not (-10.0 < linear_vel < 10.0 and -10.0 < angular_vel < 10.0):
             return False
         
-        # Check against maximum safe velocities
         if abs(linear_vel) > self.MAX_SAFE_LINEAR_VEL:
             return False
         
@@ -200,9 +199,7 @@ class SafetyValidator:
         return True
     
     def _get_safe_fallback_analysis(self) -> Dict[str, Any]:
-        """
-        Generate safe fallback analysis for error conditions.
-        """
+        """Generate safe fallback analysis for error conditions."""
         return {
             'obstacles': [{
                 'type': 'unknown',
@@ -221,23 +218,18 @@ class SafetyValidator:
 # Global Safety Validation Functions
 
 def validate_robot_command_safety(twist: Twist, config: Dict[str, Any]) -> bool:
-    """
-    Validate ROS Twist message against configuration limits.
-    """
+    """Validate ROS Twist message against configuration limits."""
     try:
         linear_x = twist.linear.x
         angular_z = twist.angular.z
         
-        # CHANGED: Use centralized thresholds
         max_linear = config.get('max_linear_velocity', SafetyThresholds.MAX_SAFE_LINEAR_VEL)
         max_angular = config.get('max_angular_velocity', SafetyThresholds.MAX_SAFE_ANGULAR_VEL)
         
-        # Check for NaN/Inf
         if not math.isfinite(linear_x) or not math.isfinite(angular_z):
             logger.error("Command contains invalid values (NaN/Inf)")
             return False
         
-        # Check linear velocity limit
         if abs(linear_x) > max_linear:
             logger.warning(
                 f"Linear velocity exceeds limit: "
@@ -245,7 +237,6 @@ def validate_robot_command_safety(twist: Twist, config: Dict[str, Any]) -> bool:
             )
             return False
         
-        # Check angular velocity limit
         if abs(angular_z) > max_angular:
             logger.warning(
                 f"Angular velocity exceeds limit: "
@@ -261,9 +252,7 @@ def validate_robot_command_safety(twist: Twist, config: Dict[str, Any]) -> bool:
 
 
 def is_velocity_safe(linear_vel: float, angular_vel: float) -> bool:
-    """
-    Quick check if velocities are safe (conservative limits).
-    """
+    """Quick check if velocities are safe (conservative limits)."""
     return (
         math.isfinite(linear_vel) and
         math.isfinite(angular_vel) and
@@ -277,13 +266,13 @@ def is_velocity_safe(linear_vel: float, angular_vel: float) -> bool:
 def get_recommended_speed_multiplier(min_obstacle_distance: float) -> float:
     """
     Calculate speed multiplier based on obstacle proximity.
-    CHANGED: Use centralized thresholds
+    ✅ UPDATED: Very aggressive thresholds
     """
-    if min_obstacle_distance < SafetyThresholds.CRITICAL_ABORT:
+    if min_obstacle_distance < SafetyThresholds.CRITICAL_ABORT:  # 0.25m
         return 0.0
-    elif min_obstacle_distance < SafetyThresholds.WARNING_ZONE:
-        return 0.3
-    elif min_obstacle_distance < SafetyThresholds.CAUTION_ZONE:
-        return 0.6
-    else:
+    elif min_obstacle_distance < SafetyThresholds.WARNING_ZONE:  # 0.40m
+        return 0.4
+    elif min_obstacle_distance < SafetyThresholds.CAUTION_ZONE:  # 0.50m
+        return 0.7
+    else:  # >= 0.80m
         return 1.0

@@ -12,7 +12,7 @@ from multi_function_agent._robot_vision_controller.utils.log.performance_logger 
 from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyValidator, SafetyThresholds
 
 from multi_function_agent._robot_vision_controller.perception.slam_controller import SLAMController
-from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor, SafetyState
+from multi_function_agent._robot_vision_controller.perception.lidar_monitor import LidarSafetyMonitor
 from multi_function_agent._robot_vision_controller.perception.rtsp_stream_handler import RTSPStreamHandler
 from multi_function_agent._robot_vision_controller.perception.robot_vision_analyzer import RobotVisionAnalyzer
 
@@ -406,16 +406,12 @@ async def run_robot_control_loop(
     iteration = 0
     last_vision_update = 0
     cached_vision_analysis = None
-
-    navigation_decision = {
-        'action': 'init',
-        'parameters': {'linear_velocity': 0.0, 'angular_velocity': 0.0, 'duration': 0.1},
-        'reason': 'initialization'
-    }
-
+    
     while max_iterations is None or iteration < max_iterations:
         try:
-            # STEP 0: Frame Acquisition
+            # ========================================
+            # STEP 1: Frame Acquisition
+            # ========================================
             lidar_snapshot = robot_interface.lidar_data
             frame = await stream_handler.get_latest_frame()
             if frame is None:
@@ -424,8 +420,8 @@ async def run_robot_control_loop(
             
             iteration += 1
             PerformanceLogger.log_iteration_start(iteration)
-
-            # Log robot position for tracking
+            
+            # Log robot position
             robot_pos = robot_interface.ros_node.get_robot_pose()
             if robot_pos:
                 logger.info(
@@ -433,64 +429,10 @@ async def run_robot_control_loop(
                     f"y={robot_pos['y']:.3f}m, "
                     f"yaw={robot_pos['theta']:.3f}rad ({np.degrees(robot_pos['theta']):.1f}°)"
                 )
-            else:
-                logger.warning("[POSITION] No odometry data available")
-
-            # STEP 1: Critical Abort Check (SINGLE LAYER)
-            abort_result = safety_monitor.check_critical_abort(
-                lidar_snapshot,
-                robot_pos=robot_pos
-            )
-
-            if abort_result['abort']:
-                logger.error(
-                    f"[CRITICAL ABORT] Obstacle at {abort_result['min_distance']:.3f}m"
-                )
-
-                # Handle deadlock/timeout from escape system
-                if abort_result.get('request_nav2_rescue'):
-                    logger.error("=" * 60)
-                    logger.error("[DEADLOCK DETECTED] Cannot escape locally")
-                    logger.error("=" * 60)
-                    logger.error(
-                        f"Obstacle clearances: {abort_result.get('clearances', {})}"
-                    )
-                    logger.error("Mission will abort - manual intervention may be needed")
-                    
-                    logger.error("[DEADLOCK] Nav2 not available, aborting mission")
-                    results["final_status"] = "deadlock_cannot_escape"
-                    break
-
-                await robot_interface.execute_command(abort_result['command'])
-                results["navigation_decisions"].append({
-                    'action': 'critical_abort',
-                    'distance': abort_result['min_distance'],
-                    'reason': abort_result.get('reason', 'critical')
-                })
-                await asyncio.sleep(0.1)
-                continue
-
-            # ✅ FIX #1: THÊM CHECK NÀY - SKIP khi đang ESCAPE_WAIT hoặc COOLDOWN
-            current_safety_state = safety_monitor.state
-            if current_safety_state in [SafetyState.ESCAPE_WAIT, SafetyState.COOLDOWN]:
-                logger.debug(
-                    f"[MAIN LOOP] Skipping navigation - "
-                    f"safety state: {current_safety_state.value}"
-                )
-                await asyncio.sleep(0.05)
-                continue
-
-            # STEP 2: Check if escape is taking too long
-            if safety_monitor.should_abort_mission():
-                logger.error(
-                    "[ESCAPE FAILED] Robot stuck after multiple escape attempts. "
-                    "Mission will abort."
-                )
-                results["final_status"] = "stuck_after_escape_timeout"
-                break
-
-            # STEP 3: Vision Analysis (Cached at 2Hz)
-            # Vision analysis (cached at 2Hz)
+            
+            # ========================================
+            # STEP 2: Vision Analysis (cached at 2Hz)
+            # ========================================
             current_time = time.time()
             
             if (cached_vision_analysis is None or 
@@ -521,8 +463,9 @@ async def run_robot_control_loop(
             PerformanceLogger.log_vision_analysis(vision_analysis, obstacles)
             results["obstacles_detected"].extend(obstacles)
             
-            # STEP 4: Mission State Update 
-            # Mission update
+            # ========================================
+            # STEP 3: Mission State Update
+            # ========================================
             robot_pos = robot_interface.ros_node.get_robot_pose()
             if robot_pos is None and hasattr(robot_interface, 'robot_status'):
                 robot_pos = {
@@ -535,13 +478,12 @@ async def run_robot_control_loop(
                 'width': frame.shape[1],
                 'height': frame.shape[0]
             } if frame is not None else None
-
-            #Extract full LiDAR scan from vision analyzer if available
+            
             full_lidar_scan = vision_analysis.get('full_lidar_scan', None)
-
+            
             if slam_controller and slam_controller.is_running:
                 slam_controller.maybe_auto_save()
-
+            
             try:
                 mission_result = mission_controller.process_frame(
                     detected_objects=detected_objects,
@@ -553,30 +495,29 @@ async def run_robot_control_loop(
                 )
                 
             except MissionTransitionError as e:
-                # Composite mission transition failed
                 logger.error("=" * 60)
                 logger.error("❌ MISSION TRANSITION FAILED")
                 logger.error("=" * 60)
                 logger.error(f"Error: {e}")
-                logger.error("")
                 logger.error("Mission aborted. Check requirements and try again.")
                 logger.error("=" * 60)
                 
                 results["final_status"] = f"transition_error: {str(e)}"
                 break
             
-            # STEP 5: Mission Completion Check
-            # Check mission completion
+            # ========================================
+            # STEP 4: Mission Completion Check
+            # ========================================
             if mission_result['completed']:
                 logger.info(f"✅ Mission complete: {mission_controller.mission.description}")
-                
                 results["final_status"] = "mission_completed"
                 break
-
-            # STEP 6: Nav2 Goal Planning (Patrol/Follow Only)
-            # Navigation decision
+            
+            # ========================================
+            # STEP 5: Nav2 Goal Planning (if applicable)
+            # ========================================
             mission_directive = mission_result['directive']
-
+            
             can_use_nav2 = (
                 nav2_ready and 
                 robot_pos is not None and
@@ -584,7 +525,7 @@ async def run_robot_control_loop(
                 not robot_interface.nav2_interface.is_navigating() and
                 mission_controller.get_current_mission_type() != 'explore_area'
             )
-
+            
             if can_use_nav2:
                 nav2_goal = _mission_directive_to_nav2_goal(
                     mission_directive,
@@ -597,10 +538,7 @@ async def run_robot_control_loop(
                     logger.info(f"[NAV2] Goal: ({goal_x:.2f}, {goal_y:.2f})")
                     
                     nav2_success = await robot_interface.send_nav2_goal(
-                        x=goal_x,
-                        y=goal_y,
-                        theta=goal_theta,
-                        blocking=False
+                        x=goal_x, y=goal_y, theta=goal_theta, blocking=False
                     )
                     
                     if nav2_success:
@@ -614,30 +552,34 @@ async def run_robot_control_loop(
                         continue
                     else:
                         can_use_nav2 = False
-
-            # STEP 7: Manual Navigation Decision (Fallback)
-            # Manual control fallback
+            
+            # ========================================
+            # STEP 6: Manual Navigation Decision
+            # ========================================
             if not can_use_nav2 or not nav2_goal:
+                # ✅ NEW: Pass lidar_data directly (not lidar_override)
                 navigation_decision = navigation_reasoner.decide_next_action(
                     vision_analysis,
                     robot_pos=robot_pos,
                     spatial_detector=vision_analyzer.spatial_detector,
-                    mission_directive=mission_directive  # CHANGED: Removed lidar_override param
+                    lidar_data=lidar_snapshot,  # ✅ CHANGED
+                    mission_directive=mission_directive
                 )
-
+                
                 if log_buffer:
                     log_buffer.log_iteration(
                         iteration=iteration,
                         robot_pos=robot_pos,
                         vision_analysis=vision_analysis,
                         navigation_decision=navigation_decision,
-                        abort_info=abort_result if abort_result.get('abort') else None
+                        abort_info=None  # ✅ NO ABORT INFO
                     )
                 
                 PerformanceLogger.log_navigation_decision(navigation_decision)
                 
+                # ✅ SIMPLIFIED: Trust reasoner, minimal validation
                 if not safety_validator.validate_movement_command(navigation_decision):
-                    logger.warning("[SAFETY] Command rejected")
+                    logger.warning("[SAFETY] Command rejected by validator")
                     navigation_decision = {
                         "action": "stop",
                         "parameters": {"linear_velocity": 0.0, "angular_velocity": 0.0, "duration": 0.1},
@@ -645,20 +587,27 @@ async def run_robot_control_loop(
                     }
                 
                 results["navigation_decisions"].append(navigation_decision)
-
-                # STEP 8: Command Execution
+                
+                # ========================================
+                # STEP 7: Command Execution
+                # ========================================
+                # Safety checks happen INSIDE execute_command (robot_interface._send_command)
                 command_success = await robot_interface.execute_command(navigation_decision)
                 PerformanceLogger.log_command_result(command_success)
                 
                 if command_success:
                     results["commands_sent"].append(navigation_decision)
+                else:
+                    # Command failed (safety abort inside)
+                    logger.warning("[EXECUTION] Command aborted by safety layer")
+                    # Let reasoner decide what to do next iteration
                 
                 await asyncio.sleep(0.05)
-
+            
             results["iterations"] = iteration
             await asyncio.sleep(0.05)
             
-        except Exception as e:                
+        except Exception as e:
             logger.error(f"❌ Loop error: {e}")
             results["final_status"] = f"error: {e}"
             try:

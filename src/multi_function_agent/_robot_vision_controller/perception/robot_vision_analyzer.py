@@ -58,27 +58,31 @@ class RobotVisionAnalyzer:
         self.CAMERA_CENTER_X = self.CAMERA_WIDTH / 2
         self.CAMERA_CENTER_Y = self.CAMERA_HEIGHT / 2
     
-    def _merge_analysis_results(
-        self,
-        spatial: Dict,
-        goal: str
-    ) -> Dict[str, any]:
-        """
-        Merge spatial analysis into unified result (no BLIP2 needed).
-        """
+    def _merge_analysis_results(self, spatial: Dict, goal: str) -> Dict[str, any]:
+        """Merge spatial analysis into unified result (no BLIP2 needed)."""
         return {
             'obstacles': spatial['obstacles'],
             'clear_paths': spatial['clear_paths'],
             'safety_score': spatial['safety_score'],
             'recommended_direction': spatial['recommended_direction'],
             'overall_confidence': spatial['spatial_confidence'],
-            'immediate_action': self.navigation_reasoner._determine_immediate_action(
-                spatial,
-                {},  # No vision context needed
-                goal
+            'immediate_action': self._map_direction_to_action(
+                spatial['recommended_direction']
             ),
             'navigation_priority': 'safety_first',
         }
+
+    # ✅ ADD helper method:
+    def _map_direction_to_action(self, direction: str) -> str:
+        """Map recommended direction to immediate action."""
+        mapping = {
+            'center': 'move_forward',
+            'forward': 'move_forward',
+            'left': 'turn_left',
+            'right': 'turn_right',
+            'stop': 'stop_immediately',
+        }
+        return mapping.get(direction, 'stop_immediately')
     
     def _get_cached_analysis(self) -> Dict[str, any]:
         """
