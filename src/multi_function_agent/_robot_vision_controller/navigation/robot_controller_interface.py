@@ -8,6 +8,8 @@ import logging
 import asyncio
 import threading
 from enum import Enum
+from turtle import distance
+from turtle import distance
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
@@ -429,7 +431,54 @@ class RobotControllerInterface(Node):
             logger.error(f"Command execution failed: {e}")
             self.robot_status.state = RobotState.ERROR
             return False
-    
+        
+    def _check_front_clearance(self, lidar_data) -> Optional[float]:
+        """
+        Check ONLY front hemisphere clearance (±60° arc).
+        
+        Returns:
+            Minimum distance in front arc, or None if no data.
+        """
+        if lidar_data is None:
+            return None
+        
+        try:
+            ranges = lidar_data.ranges
+            angle_min = lidar_data.angle_min
+            angle_increment = lidar_data.angle_increment
+            
+            front_distances = []
+            
+            for i, distance in enumerate(ranges):
+                if np.isnan(distance) or np.isinf(distance):
+                    continue
+                
+                # Calculate angle
+                angle_rad = angle_min + (i * angle_increment)
+                angle_deg = np.degrees(angle_rad)
+                
+                # Normalize to [-180, 180]
+                while angle_deg > 180:
+                    angle_deg -= 360
+                while angle_deg < -180:
+                    angle_deg += 360
+                
+                # Front arc: |angle| <= 60°
+                if abs(angle_deg) <= SafetyThresholds.OBSTACLE_REJECTION_ARC:
+                    front_distances.append(distance)
+            
+            if not front_distances:
+                return None
+            
+            min_front = min(front_distances)
+            
+            logger.debug(f"[FORWARD MONITOR] Front: {min_front:.3f}m")
+            return min_front
+            
+        except Exception as e:
+            logger.error(f"Front check failed: {e}")
+            return None
+
     async def _send_command(
         self, 
         twist: Twist, 
@@ -453,6 +502,11 @@ class RobotControllerInterface(Node):
             publish_rate = 20  # 20Hz
             interval = 1.0 / publish_rate
             iterations = int(duration / interval)
+
+            is_pure_rotation = (
+                abs(twist.linear.x) < 0.01 and 
+                abs(twist.angular.z) > 0.1
+            )
             
             for i in range(max(1, iterations)):
                 # ========================================
@@ -475,22 +529,23 @@ class RobotControllerInterface(Node):
                 # ========================================
                 # SAFETY LAYER 2: Simple forward check
                 # ========================================
-                if twist.linear.x > 0 and self.lidar_data is not None:
-                    # Simple check: min distance < critical threshold?
-                    obstacle_info = self.safety_monitor.get_obstacle_info(self.lidar_data)
-                    min_dist = obstacle_info['min_distance']
-                    
-                    if min_dist < SafetyThresholds.CRITICAL_ABORT:
+                if twist.linear.x > 0 and self.lidar_data is not None and not is_pure_rotation:
+                    front_clearance = self._check_front_clearance(self.lidar_data)
+
+                    if front_clearance is not None and front_clearance < SafetyThresholds.CRITICAL_ABORT:
                         logger.error(
-                            f"[FORWARD ABORT] Obstacle too close: {min_dist:.3f}m "
+                            f"[FORWARD ABORT] Front obstacle: {front_clearance:.3f}m "
                             f"< {SafetyThresholds.CRITICAL_ABORT:.2f}m"
                         )
-                        # Emergency stop
                         for _ in range(5):
                             self.ros_node.publish_stop()
                             await asyncio.sleep(0.01)
                         return False
-                
+
+                if is_pure_rotation and i == 0:
+                    logger.debug(f"[ROTATION] Bypassing forward check "
+                                 f"(angular={twist.angular.z:.3f})")
+
                 # Publish velocity command
                 self.ros_node.publish_velocity(twist.linear.x, twist.angular.z)
                 await asyncio.sleep(interval)

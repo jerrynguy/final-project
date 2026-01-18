@@ -57,6 +57,12 @@ class NavigationReasoner:
         # Frontier detection
         self.frontier_detector = FrontierDetector()
         self.use_frontier_detection = True
+
+        # NEW: Stuck detection
+        self.last_position = None
+        self.position_history = []
+        self.stuck_counter = 0
+        self.STUCK_THRESHOLD = 5  # 5 iterations without movement
         
         logger.info(
             f"[NAVIGATION] Initialized 4-zone system:\n"
@@ -284,87 +290,117 @@ class NavigationReasoner:
                 'confidence': 0.7,
                 'reason': 'warning_back_escape'
             }
-    
+
     def _navigate_critical(self, zones: Dict[str, float], lidar_data) -> Dict:
         """
-        Critical zone (<0.50m in some zone) → Rotate or backup.
+        Critical zone (<0.50m) → Turn toward best clearance.
+        
+        SIMPLE STRATEGY: 
+        1. Find direction with most space
+        2. Rotate toward it
+        3. If already facing it, creep forward
         """
-        closest_zone = min(zones, key=zones.get)
-        closest_dist = zones[closest_zone]
+        # Find best and worst zones
+        best_zone = max(zones, key=zones.get)
+        worst_zone = min(zones, key=zones.get)
+        best_dist = zones[best_zone]
+        worst_dist = zones[worst_zone]
         
         logger.warning(
-            f"[CRITICAL ZONE] {closest_zone.upper()} blocked at {closest_dist:.2f}m"
+            f"[CRITICAL] Worst: {worst_zone}={worst_dist:.2f}m, "
+            f"Best: {best_zone}={best_dist:.2f}m"
         )
-        
-        # OPTION 1: Front blocked
-        if closest_zone == 'front':
-            if zones['front'] < 0.40:
-                # Very close (< 0.40m) → Must rotate
-                if zones['left'] > zones['right']:
-                    logger.warning(f"[CRITICAL] Front blocked, rotating LEFT (left:{zones['left']:.2f}m > right:{zones['right']:.2f}m)")
-                    return self._rotate_left()
-                else:
-                    logger.warning(f"[CRITICAL] Front blocked, rotating RIGHT (right:{zones['right']:.2f}m > left:{zones['left']:.2f}m)")
-                    return self._rotate_right()
-            else:
-                # 0.40-0.50m → Can creep if sides clear
-                if zones['left'] > 0.70 and zones['right'] > 0.70:
-                    logger.info(f"[CRITICAL] Front tight but sides clear, creeping forward")
-                    return self._creep_forward()
-                else:
-                    # Sides also tight → Rotate to better side
-                    if zones['left'] > zones['right']:
-                        logger.warning(f"[CRITICAL] Sides tight, rotating LEFT")
-                        return self._rotate_left()
-                    else:
-                        logger.warning(f"[CRITICAL] Sides tight, rotating RIGHT")
-                        return self._rotate_right()
-        
-        # OPTION 2: Left blocked → Rotate right
-        elif closest_zone == 'left':
-            logger.warning(f"[CRITICAL] Left blocked ({closest_dist:.2f}m), rotating RIGHT")
-            return self._rotate_right()
-        
-        # OPTION 3: Right blocked → Rotate left
-        elif closest_zone == 'right':
-            logger.warning(f"[CRITICAL] Right blocked ({closest_dist:.2f}m), rotating LEFT")
-            return self._rotate_left()
-        
-        # OPTION 4: Back blocked → Move forward if possible
-        else:
-            if zones['front'] > 0.70:
-                logger.warning(f"[CRITICAL] Back blocked, escaping FORWARD (front:{zones['front']:.2f}m)")
+
+        # TRUE DEADLOCK: All directions < 0.30m (too tight to turn)
+        if best_dist < 0.30:
+            logger.error(f"[TRUE DEADLOCK] All zones < 0.30m")
+            
+            # Last resort: Try tiny backup
+            rear_check = self.safety_monitor.check_rear_clearance(lidar_data)
+            if rear_check and rear_check > 0.30:
+                logger.warning("[DESPERATION] Attempting micro-backup")
                 return {
-                    'action': 'move_forward',
+                    'action': 'backup_slow',
                     'parameters': {
-                        'linear_velocity': 0.2,
+                        'linear_velocity': -0.10,
                         'angular_velocity': 0.0,
                         'duration': 1.0
                     },
-                    'confidence': 0.7,
-                    'reason': 'critical_back_escape'
+                    'confidence': 0.5,
+                    'reason': 'desperation_backup'
                 }
+            
+            return self._stop_command()
+
+        # RULE 1: If front is BEST and > 0.40m → TRY FORWARD
+        if best_zone == 'front' and best_dist > 0.40:
+            logger.warning(f"[CRITICAL] Front is BEST ({best_dist:.2f}m), attempting CREEP")
+            return {
+                'action': 'creep_forward',
+                'parameters': {
+                    'linear_velocity': 0.15,  # Slow but FORWARD
+                    'angular_velocity': 0.0,
+                    'duration': 1.5
+                },
+                'confidence': 0.75,
+                'reason': 'critical_creep_best_front'
+            }
+
+        #o RULE 2: If front > 0.35m (even if not best) → TRY FORWARD ANYWAY
+        # This breaks rotation loops
+        if zones['front'] > 0.35 and best_dist - zones['front'] < 0.30:
+            # Front is "good enough" (within 0.30m of best)
+            logger.warning(
+                f"[CRITICAL] Front acceptable ({zones['front']:.2f}m), "
+                f"forcing FORWARD to break rotation loop"
+            )
+            return {
+                'action': 'creep_forward',
+                'parameters': {
+                    'linear_velocity': 0.12,
+                    'angular_velocity': 0.0,
+                    'duration': 1.2
+                },
+                'confidence': 0.70,
+                'reason': 'critical_break_rotation_loop'
+            }
+        
+        # STRATEGY: Turn toward best clearance
+        if best_zone == 'left':
+            logger.warning(f"[CRITICAL] Rotating toward BEST clearance: LEFT ({best_dist:.2f}m)")
+            return {
+                'action': 'rotate_left',
+                'parameters': {
+                    'linear_velocity': 0.0,
+                    'angular_velocity': 0.4,  # Slower rotation in tight space
+                    'duration': 1.2
+                },
+                'confidence': 0.8,
+                'reason': 'critical_turn_to_best'
+            }
+        
+        elif best_zone == 'right':
+            logger.warning(f"[CRITICAL] Rotating toward BEST clearance: RIGHT ({best_dist:.2f}m)")
+            return {
+                'action': 'rotate_right',
+                'parameters': {
+                    'linear_velocity': 0.0,
+                    'angular_velocity': -0.4,
+                    'duration': 1.2
+                },
+                'confidence': 0.8,
+                'reason': 'critical_turn_to_best'
+            }
+        
+        else:  # best_zone == 'back'
+            # Turn 180° - pick left or right based on which is more clear
+            if zones['left'] > zones['right']:
+                logger.warning(f"[CRITICAL] Best is BACK, turning LEFT first")
+                return self._rotate_left()
             else:
-                # Front also blocked → Try backup if rear clear
-                rear_clearance = self.safety_monitor.check_rear_clearance(lidar_data)
-                
-                if rear_clearance and rear_clearance > 0.40:
-                    logger.warning(f"[CRITICAL] All front blocked, BACKING UP (rear:{rear_clearance:.2f}m)")
-                    return {
-                        'action': 'backup_slow',
-                        'parameters': {
-                            'linear_velocity': -0.20,
-                            'angular_velocity': 0.0,
-                            'duration': 2.0
-                        },
-                        'confidence': 0.7,
-                        'reason': 'critical_backup'
-                    }
-                else:
-                    # Stuck
-                    logger.error(f"[DEADLOCK] All directions blocked")
-                    return self._stop_command()
-    
+                logger.warning(f"[CRITICAL] Best is BACK, turning RIGHT first")
+                return self._rotate_right()
+            
     # ===== Helper Functions =====
     
     def _rotate_left(self) -> Dict:
@@ -419,6 +455,55 @@ class NavigationReasoner:
             'reason': 'emergency_stop'
         }
     
+    def _check_if_stuck(self, robot_pos: Dict) -> bool:
+        """
+        Detect if robot stuck in same position.
+        
+        Returns:
+            True if stuck (no movement for STUCK_THRESHOLD iterations)
+        """
+        if robot_pos is None:
+            return False
+        
+        current_pos = (robot_pos['x'], robot_pos['y'])
+        
+        # Track position history
+        self.position_history.append(current_pos)
+        if len(self.position_history) > self.STUCK_THRESHOLD:
+            self.position_history.pop(0)
+        
+        # Check if all recent positions are same (within 5cm)
+        if len(self.position_history) >= self.STUCK_THRESHOLD:
+            first_pos = self.position_history[0]
+            
+            all_same = all(
+                abs(pos[0] - first_pos[0]) < 0.05 and 
+                abs(pos[1] - first_pos[1]) < 0.05
+                for pos in self.position_history
+            )
+            
+            if all_same:
+                self.stuck_counter += 1
+               
+                # Only trigger if stuck for LONG time
+                # Allow 10 iterations of rotation before declaring stuck
+                if self.stuck_counter >= 10:  # ← CHANGED: was immediate
+                    logger.warning(
+                        f"[STUCK #{self.stuck_counter}] No movement at "
+                        f"({first_pos[0]:.2f}, {first_pos[1]:.2f})"
+                    )
+                    return True
+                else:
+                    logger.debug(
+                        f"[POSITION STABLE #{self.stuck_counter}] "
+                        f"(might be rotating, waiting...)"
+                    )
+                    return False
+
+        # Reset counter if moving
+        self.stuck_counter = 0
+        return False
+    
     def decide_next_action(
         self,
         vision_analysis: Dict,
@@ -444,6 +529,25 @@ class NavigationReasoner:
         if self.safety_monitor is None:
             logger.error("[NAV] No safety monitor reference")
             return self._stop_command()
+        
+        # NEW: Check if stuck BEFORE choosing action
+        if robot_pos and self._check_if_stuck(robot_pos):
+            logger.error("[STUCK] Robot not moving, forcing aggressive turn")
+            
+            # Force random large rotation
+            import random
+            direction = random.choice(['left', 'right'])
+            
+            return {
+                'action': f'rotate_{direction}',
+                'parameters': {
+                    'linear_velocity': 0.0,
+                    'angular_velocity': 0.6 if direction == 'left' else -0.6,
+                    'duration': 2.5  # Longer turn
+                },
+                'confidence': 0.9,
+                'reason': 'stuck_recovery_aggressive_turn'
+            }
         
         # STEP 2: Analyze into 4 zones
         zones = self._analyze_4_zones(lidar_data)
