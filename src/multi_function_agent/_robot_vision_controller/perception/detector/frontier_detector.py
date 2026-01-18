@@ -4,6 +4,7 @@ Detects TRUE unexplored regions by analyzing SLAM map occupancy.
 """
 
 import logging
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
@@ -39,7 +40,7 @@ class FrontierDetector:
         self.detection_interval = 3.0  # Detect every 3 seconds
         
         # Wall safety constraints - OPTIMIZED FOR TURTLEBOT3
-        self.min_safe_distance_from_wall = 0.6  # ← CHANGED: 2.0m → 0.6m (TurtleBot3 optimized)
+        self.min_safe_distance_from_wall = SafetyThresholds.FRONTIER_WALL_SAFE_DISTANCE
         self.wall_penalty_factor = 0.8  # ← CHANGED: 0.3 → 0.8 (heavier penalty for wall-adjacent)
         
         # SLAM map values
@@ -250,7 +251,7 @@ class FrontierDetector:
         4. Not backward direction (abs(angle) < 150°)
         """
         # Rule 1: Minimum clearance
-        if distance < 1.5:
+        if distance < SafetyThresholds.FRONTIER_MIN_CLEARANCE:
             return False
         
         # Rule 2: Not a wall (hitting sensor max)
@@ -296,7 +297,7 @@ class FrontierDetector:
         if not full_scan:
             return False, 0.0
         
-        WALL_THRESHOLD = 0.8  # ← CHANGED: 2.5m → 0.8m (tighter wall detection)
+        WALL_THRESHOLD = SafetyThresholds.FRONTIER_WALL_THRESHOLD
         CHECK_ARC = 30  # Keep ±30° (reasonable for detection)
         WALL_RATIO_THRESHOLD = 0.3  # ← CHANGED: 0.4 → 0.3 (more sensitive, 30% = wall-adjacent)
         

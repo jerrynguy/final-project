@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": 1768366354.30929,
+  "last_updated": 1768742812.880615,
   "adjustments": [
     {
       "parameter": "SAFE_ZONE",
-      "value": 0.8,
-      "reasoning": "Decrease safe zone radius to allow robot to navigate through narrower spaces, while still maintaining a safe distance from obstacles",
+      "value": 0.9,
+      "reasoning": "Increasing SAFE_ZONE buffer to 0.9m allows for more conservative navigation and reduces the likelihood of false positives in open spaces",
       "confidence": 0.85,
-      "applied_at": 1768366354.3091981
+      "applied_at": 1768742812.8805265
     }
   ]
 }

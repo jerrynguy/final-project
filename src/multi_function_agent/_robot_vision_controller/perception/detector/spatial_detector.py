@@ -308,7 +308,7 @@ class SpatialDetector:
             clearances = self._calculate_clearances_from_lidar(lidar_obstacles)
 
             # FIXED THRESHOLD: Always use safe_distance
-            adaptive_threshold = self.thresholds.ZONE_2_MEDIUM  # ✅ 0.80m
+            adaptive_threshold = self.thresholds.ZONE_2_CAUTION
             logger.info(f"[THRESHOLD] Using zone-based threshold {adaptive_threshold:.2f}m")
 
             # Nav2 handles direction finding - just use default

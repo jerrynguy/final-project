@@ -178,7 +178,7 @@ class NavigationReasoner:
                 }
         
         # No frontier → Forward based on front clearance
-        if zones['front'] > 1.0:
+        if zones['front'] > SafetyThresholds.FRONTIER_MIN_CLEARANCE:
             logger.info(f"[SAFE ZONE] Front clear ({zones['front']:.2f}m), moving forward")
             return {
                 'action': 'move_forward',
@@ -312,12 +312,12 @@ class NavigationReasoner:
         )
 
         # TRUE DEADLOCK: All directions < 0.30m (too tight to turn)
-        if best_dist < 0.30:
-            logger.error(f"[TRUE DEADLOCK] All zones < 0.30m")
+        if best_dist < SafetyThresholds.ZONE_0_EMERGENCY:
+            logger.error(f"[TRUE DEADLOCK] All zones < {SafetyThresholds.ZONE_0_EMERGENCY}m")
             
             # Last resort: Try tiny backup
             rear_check = self.safety_monitor.check_rear_clearance(lidar_data)
-            if rear_check and rear_check > 0.30:
+            if rear_check and rear_check > SafetyThresholds.ZONE_1_PAUSE:
                 logger.warning("[DESPERATION] Attempting micro-backup")
                 return {
                     'action': 'backup_slow',
@@ -333,12 +333,22 @@ class NavigationReasoner:
             return self._stop_command()
 
         # RULE 1: If front is BEST and > 0.40m → TRY FORWARD
-        if best_zone == 'front' and best_dist > 0.40:
+        if best_zone == 'front' and best_dist > SafetyThresholds.ZONE_2_CAUTION:
+            # Adaptive speed based on clearance
+            if best_dist > 0.80:
+                # Plenty of room → Use higher speed
+                linear_vel = 0.22 
+            elif best_dist > 0.60:
+                # Good clearance → Medium speed
+                linear_vel = 0.18  
+            else:
+                # Moderate clearance → Conservative
+                linear_vel = 0.15  # Original
             logger.warning(f"[CRITICAL] Front is BEST ({best_dist:.2f}m), attempting CREEP")
             return {
                 'action': 'creep_forward',
                 'parameters': {
-                    'linear_velocity': 0.15,  # Slow but FORWARD
+                    'linear_velocity': linear_vel,  # Slow but FORWARD
                     'angular_velocity': 0.0,
                     'duration': 1.5
                 },
@@ -348,16 +358,24 @@ class NavigationReasoner:
 
         #o RULE 2: If front > 0.35m (even if not best) → TRY FORWARD ANYWAY
         # This breaks rotation loops
-        if zones['front'] > 0.35 and best_dist - zones['front'] < 0.30:
+        if zones['front'] > SafetyThresholds.ZONE_2_CAUTION * 0.9 and best_dist - zones['front'] < SafetyThresholds.ZONE_1_PAUSE:
+            # ✅ NEW: Adaptive speed
+            if zones['front'] > 0.60:
+                linear_vel = 0.18  # ← CHANGED from 0.12
+            elif zones['front'] > 0.45:
+                linear_vel = 0.15  # ← NEW tier
+            else:
+                linear_vel = 0.12  # Original (tight space)
+
             # Front is "good enough" (within 0.30m of best)
             logger.warning(
                 f"[CRITICAL] Front acceptable ({zones['front']:.2f}m), "
-                f"forcing FORWARD to break rotation loop"
+                f"forcing FORWARD at {linear_vel:.2f} m/s to break rotation loop"
             )
             return {
                 'action': 'creep_forward',
                 'parameters': {
-                    'linear_velocity': 0.12,
+                    'linear_velocity': linear_vel,
                     'angular_velocity': 0.0,
                     'duration': 1.2
                 },

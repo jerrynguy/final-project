@@ -16,68 +16,62 @@ logger = logging.getLogger(__name__)
 
 # GLOBAL SAFETY THRESHOLDS (Single Source of Truth)
 
+# safety_checks.py
+
 class SafetyThresholds:
     """
-    🚨 SINGLE SOURCE OF TRUTH - ALL modules MUST import from here!
-    
-    Design philosophy (AGGRESSIVE - Optimized for TurtleBot3):
-    - Hardware protection: 0.12m (physical collision)
-    - Critical abort: 0.25m (emergency stop)
-    - Safe operation: 0.40m+ (normal movement)
+    🚨 SINGLE SOURCE OF TRUTH - ALL modules import from here!
+    Optimized for TurtleBot3 Waffle (width=0.28m)
     """
     
     # ===== HARDWARE PROTECTION =====
-    HARDWARE_LIMIT = 0.12           # Physical collision distance (never breach)
+    HARDWARE_LIMIT = 0.12  # Physical collision (unchanged)
     
-    # ===== CRITICAL ABORT (Emergency Stop) =====
-    CRITICAL_ABORT = 0.25           # Emergency stop trigger (all directions)
-    CRITICAL_ABORT_FRONT = 0.22     # Frontal (±45° arc) - slightly tighter
-    CRITICAL_ABORT_SIDE = 0.15      # Side (±90-180° arc) - more lenient
-
-    # ===== SAFE OPERATION ZONES =====
-    RESUME_SAFE = 0.50              # Resume after abort (hysteresis)
-    ESCAPE_SAFE_THRESHOLD = 0.40    # ✅ CHANGED: 0.50 → 0.40 (more aggressive)
+    # ===== CRITICAL ABORT =====
+    CRITICAL_ABORT = 0.25  # Emergency stop (unchanged)
+    CRITICAL_ABORT_FRONT = 0.22
+    CRITICAL_ABORT_SIDE = 0.15
     
-    # ===== NAVIGATION ZONES (for NavigationReasoner) =====
-    # ✅ VERY AGGRESSIVE: TurtleBot3 can navigate tight spaces
-    ZONE_0_EMERGENCY = 0.30         # Emergency rotate/backup only (unchanged)
-    ZONE_1_PAUSE = 0.40             
-    ZONE_2_CAUTION = 0.50           
-    ZONE_3_COMFORTABLE = 0.80       
+    # ===== NAVIGATION ZONES ===== 
+    ZONE_0_EMERGENCY = 0.25  
+    ZONE_1_PAUSE = 0.40      
+    ZONE_2_CAUTION = 0.50    
+    ZONE_3_COMFORTABLE = 0.70 
     
     # ===== LEGACY ALIASES (backward compatibility) =====
-    ZONE_1_CRITICAL = ZONE_0_EMERGENCY  
-    ZONE_2_MEDIUM = ZONE_2_CAUTION      
-    ZONE_3_FAR = ZONE_3_COMFORTABLE     
+    WARNING_ZONE = ZONE_1_PAUSE  
+    CAUTION_ZONE = ZONE_2_CAUTION  
+    SAFE_ZONE = ZONE_3_COMFORTABLE  
     
-    WARNING_ZONE = ZONE_1_PAUSE         
-    CAUTION_ZONE = ZONE_2_CAUTION       
-    SAFE_ZONE = ZONE_3_COMFORTABLE      
+    # ===== NEW: FRONTIER DETECTION =====
+    FRONTIER_MIN_CLEARANCE = 1.0  
+    FRONTIER_WALL_THRESHOLD = 0.60  
+    FRONTIER_WALL_SAFE_DISTANCE = 0.50  
     
     # ===== ESCAPE SYSTEM =====
-    OBSTACLE_REJECTION_ARC = 45     # ±45° arc for obstacle rejection
+    RESUME_SAFE = 0.50  
+    ESCAPE_SAFE_THRESHOLD = 0.40  
     
     # ===== BACKUP SAFETY =====
-    MIN_SAFE_BACKUP_CLEARANCE = 0.40    # ✅ CHANGED: 0.50 → 0.40 (more aggressive)
-    BACKUP_ABORT_THRESHOLD = 0.25       # Emergency stop during backup execution
-    BACKUP_CHECK_ARC = 30               # ±30° arc for rear validation
+    MIN_SAFE_BACKUP_CLEARANCE = 0.40  
+    BACKUP_ABORT_THRESHOLD = 0.25
+    BACKUP_CHECK_ARC = 30
     
-    # ===== LATERAL ESCAPE PREFERENCE =====
-    LATERAL_PREFERENCE_THRESHOLD = 0.40  # ✅ CHANGED: 0.50 → 0.40 (prefer lateral)
+    # ===== LATERAL ESCAPE =====
+    LATERAL_PREFERENCE_THRESHOLD = 0.40  
     
     # ===== VELOCITY LIMITS =====
-    MAX_SAFE_LINEAR_VEL = 0.6       # Maximum linear velocity (m/s)
-    MAX_SAFE_ANGULAR_VEL = 2.5      # Maximum angular velocity (rad/s)
+    MAX_SAFE_LINEAR_VEL = 0.6
+    MAX_SAFE_ANGULAR_VEL = 2.5
     
-    # ===== DIRECTIONAL ARC DEFINITIONS =====
-    FRONT_ARC_HALF_ANGLE = 60       # ±60° = 120° frontal cone
-    SIDE_ARC_HALF_ANGLE = 90        # ±90° = 180° side awareness
-    
-    # ===== REAR ARC SAFETY =====
-    REAR_ARC_ANGLE = 120            # Rear arc starts at ±120°
+    # ===== DIRECTIONAL ARCS =====
+    FRONT_ARC_HALF_ANGLE = 60
+    SIDE_ARC_HALF_ANGLE = 90
+    REAR_ARC_ANGLE = 120
+    OBSTACLE_REJECTION_ARC = 45
     
     # ===== RECOVERY BEHAVIOR =====
-    TIGHT_CORNER_THRESHOLD = 0.3    # If both L/R < 0.3m → rotate-only
+    TIGHT_CORNER_THRESHOLD = 0.25  # ← CHANGED: 0.3 → 0.25 (sync with ZONE_0)
     
     @classmethod
     def get_critical_distance_for_direction(cls, angle_deg: float, is_moving_forward: bool) -> float:
