@@ -565,6 +565,8 @@ async def run_robot_control_loop(
                     lidar_data=lidar_snapshot,  # ✅ CHANGED
                     mission_directive=mission_directive
                 )
+                command_success = await robot_interface.execute_command(navigation_decision)
+                navigation_decision['success'] = command_success
                 
                 if log_buffer:
                     log_buffer.log_iteration(
@@ -592,7 +594,6 @@ async def run_robot_control_loop(
                 # STEP 7: Command Execution
                 # ========================================
                 # Safety checks happen INSIDE execute_command (robot_interface._send_command)
-                command_success = await robot_interface.execute_command(navigation_decision)
                 PerformanceLogger.log_command_result(command_success)
                 
                 if command_success:

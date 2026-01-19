@@ -96,18 +96,22 @@ Focus on safety parameter issues causing "death pendulum" (oscillation/spinning)
             logger.info("[ACE] Starting mission analysis...")
             
             # Format logs cho LLM
-            formatted_logs = LogAnalyzer.format_for_llm(mission_summary)
+            formatted_logs = LogAnalyzer.format_for_llm_json(mission_summary)
             
             # Thêm current parameters
-            current_params = LogAnalyzer.extract_current_parameters()
-            params_str = json.dumps(current_params, indent=2)
+            params_str = json.dumps(formatted_logs, indent=2)
             
             user_message = f"""{formatted_logs}
 
 === CURRENT PARAMETERS ===
 {params_str}
 
-Please analyze the above mission logs and provide your diagnosis with parameter adjustment recommendations.
+Provide diagnosis and recommendations as JSON with:
+- diagnosis: string
+- root_cause: string
+- severity: "low"|"medium"|"high"|"critical"
+- death_pendulum_detected: boolean
+- recommendations: array of {{parameter, current_value, suggested_value, reasoning, confidence}}
 """
             
             logger.info(f"[ACE] Formatted logs: {len(formatted_logs)} chars")

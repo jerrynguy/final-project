@@ -5,6 +5,7 @@ Trích xuất và format logs cho LLM phân tích.
 
 import logging
 import json
+from time import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from collections import deque
@@ -37,6 +38,11 @@ class MissionSummary:
     duration_seconds: float
     abort_events: List[AbortEvent]
 
+# Key performance metrics
+    command_success_rate: float = 0.0  # % commands not aborted
+    near_miss_count: int = 0  # Obstacles < CRITICAL_ABORT but didn't abort
+    distance_traveled: float = 0.0  # Total distance in meters
+    avg_speed: float = 0.0  # m/s
 
 class LogBuffer:
     """
@@ -52,6 +58,9 @@ class LogBuffer:
         self.abort_events = []
         self.mission_start_time = None
         self.mission_info = {}
+        self.near_misses = []
+        self.total_distance = 0.0
+        self.last_position = None
     
     def log_iteration(
         self,
@@ -96,6 +105,27 @@ class LogBuffer:
             self.abort_events.append(abort_event)
             entry['abort'] = True
         
+        # Track near misses (close calls that didn't abort)
+        obstacles = vision_analysis.get('obstacles', [])
+        if obstacles and not (abort_info and abort_info.get('abort')):
+            min_dist = min(obs.get('distance_estimate', 999) for obs in obstacles)
+            
+            if min_dist < 0.25:  # SafetyThresholds.CRITICAL_ABORT
+                self.near_misses.append({
+                    'iteration': iteration,
+                    'distance': min_dist,
+                    'position': robot_pos
+                })
+        
+        # Track distance traveled
+        if robot_pos and self.last_position:
+            import math
+            dx = robot_pos['x'] - self.last_position['x']
+            dy = robot_pos['y'] - self.last_position['y']
+            dist = math.sqrt(dx**2 + dy**2)
+            self.total_distance += dist
+        
+        self.last_position = robot_pos
         self.iterations.append(entry)
     
     def set_mission_info(self, mission_type: str, description: str):
@@ -108,31 +138,38 @@ class LogBuffer:
         self.mission_start_time = time.time()
     
     def get_mission_summary(self, completion_status: str) -> MissionSummary:
-        """
-        Tạo mission summary để gửi cho LLM.
-        
-        Args:
-            completion_status: 'completed', 'aborted', 'timeout', etc.
-        
-        Returns:
-            MissionSummary object
-        """
-        import time
-        
-        # Đếm stuck episodes (consecutive aborts tại vị trí gần nhau)
         stuck_episodes = self._count_stuck_episodes()
-        
         duration = time.time() - self.mission_start_time if self.mission_start_time else 0
+        
+        # Calculate metrics
+        total_iterations = len(self.iterations)
+        total_aborts = len(self.abort_events)
+        
+        # Command success rate
+        successful_commands = total_iterations - total_aborts
+        command_success_rate = (successful_commands / max(total_iterations, 1)) * 100
+        
+        # Near miss count
+        near_miss_count = len(self.near_misses)
+        
+        # Average speed
+        avg_speed = self.total_distance / max(duration, 1)
         
         return MissionSummary(
             mission_type=self.mission_info.get('type', 'unknown'),
             mission_description=self.mission_info.get('description', ''),
-            total_iterations=len(self.iterations),
-            total_aborts=len(self.abort_events),
+            total_iterations=total_iterations,
+            total_aborts=total_aborts,
             stuck_episodes=stuck_episodes,
             completion_status=completion_status,
             duration_seconds=duration,
-            abort_events=self.abort_events[-50:]  # Last 50 aborts only
+            abort_events=self.abort_events[-50:],
+            
+            # Performance metrics
+            command_success_rate=command_success_rate,
+            near_miss_count=near_miss_count,
+            distance_traveled=self.total_distance,
+            avg_speed=avg_speed
         )
     
     def _count_stuck_episodes(self) -> int:
@@ -191,63 +228,68 @@ class LogAnalyzer:
     """
     
     @staticmethod
-    def format_for_llm(summary: MissionSummary) -> str:
+    def format_for_llm_json(summary: MissionSummary) -> dict:
         """
-        Format mission summary thành human-readable text cho LLM.
+        Format mission summary as structured JSON for LLM.
+        
+        Advantages over prose:
+        - 50% fewer tokens
+        - No parsing ambiguity
+        - Better for structured analysis
         
         Returns:
-            Formatted string ready for LLM prompt
+            dict ready for json.dumps()
         """
-        output = f"""=== MISSION ANALYSIS REQUEST ===
-
-Mission Type: {summary.mission_type}
-Description: {summary.mission_description}
-Duration: {summary.duration_seconds:.1f}s
-Total Iterations: {summary.total_iterations}
-Status: {summary.completion_status}
-
-=== PERFORMANCE METRICS ===
-Total Aborts: {summary.total_aborts}
-Stuck Episodes: {summary.stuck_episodes}
-Abort Rate: {(summary.total_aborts / max(summary.total_iterations, 1)) * 100:.1f}%
-
-"""
+        # Pre-compute patterns before sending to LLM
+        death_pendulum = LogAnalyzer._detect_death_pendulum(summary.abort_events)
+        location_groups = LogAnalyzer._group_aborts_by_location(
+            summary.abort_events, 
+            tolerance=0.3
+        )
         
-        # Nếu có aborts, phân tích pattern
-        if summary.abort_events:
-            output += "=== ABORT PATTERN ANALYSIS ===\n\n"
-            
-            # Group aborts by location
-            location_groups = LogAnalyzer._group_aborts_by_location(
-                summary.abort_events
-            )
-            
-            output += f"Abort Hotspots: {len(location_groups)} locations\n\n"
-            
-            for i, (location, events) in enumerate(location_groups.items(), 1):
-                output += f"Hotspot {i}: Position ~{location}\n"
-                output += f"  - Aborts: {len(events)}\n"
-                
-                # Sample events
-                output += f"  - Sample sequence:\n"
-                for event in events[:3]:  # First 3 events
-                    output += f"    • Iter {event.iteration}: "
-                    output += f"obstacle at {event.obstacle_angle:.1f}° "
-                    output += f"({event.obstacle_distance:.2f}m) "
-                    output += f"→ {event.command_executed}\n"
-                
-                output += "\n"
-            
-            # Death pendulum detection
-            pendulum_detected = LogAnalyzer._detect_death_pendulum(
-                summary.abort_events
-            )
-            
-            if pendulum_detected:
-                output += "🚨 DEATH PENDULUM DETECTED:\n"
-                output += f"{pendulum_detected}\n\n"
-        
-        return output
+        return {
+            "mission": {
+                "type": summary.mission_type,
+                "description": summary.mission_description,
+                "duration_sec": round(summary.duration_seconds, 1),
+                "status": summary.completion_status
+            },
+            "metrics": {
+                "total_iterations": summary.total_iterations,
+                "total_aborts": summary.total_aborts,
+                "stuck_episodes": summary.stuck_episodes,
+                "abort_rate_pct": round(
+                    (summary.total_aborts / max(summary.total_iterations, 1)) * 100, 
+                    1
+                ),
+                "command_success_rate_pct": round(summary.command_success_rate, 1),
+                "near_miss_count": summary.near_miss_count,
+                "distance_traveled_m": round(summary.distance_traveled, 2),
+                "avg_speed_mps": round(summary.avg_speed, 3)
+            },
+            "patterns": {
+                "death_pendulum": {
+                    "detected": death_pendulum is not None,
+                    "details": death_pendulum if death_pendulum else None
+                },
+                "abort_hotspots": [
+                    {
+                        "position": location,
+                        "count": len(events),
+                        "sample_angles_deg": [
+                            round(e.obstacle_angle, 1) 
+                            for e in events[:5]
+                        ],
+                        "sample_distances_m": [
+                            round(e.obstacle_distance, 2) 
+                            for e in events[:5]
+                        ]
+                    }
+                    for location, events in list(location_groups.items())[:3]
+                ]
+            },
+            "current_parameters": LogAnalyzer.extract_current_parameters()
+        }
     
     @staticmethod
     def _group_aborts_by_location(

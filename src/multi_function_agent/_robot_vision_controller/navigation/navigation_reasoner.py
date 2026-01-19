@@ -548,7 +548,21 @@ class NavigationReasoner:
             logger.error("[NAV] No safety monitor reference")
             return self._stop_command()
         
-        # NEW: Check if stuck BEFORE choosing action
+        # PRIORITY: Check mission directive FIRST
+        if mission_directive == 'directional_stop':
+            logger.info("[MISSION] Stop directive - halting all movement")
+            return {
+                'action': 'stop',
+                'parameters': {
+                    'linear_velocity': 0.0,
+                    'angular_velocity': 0.0,
+                    'duration': 0.1
+                },
+                'confidence': 1.0,
+                'reason': 'mission_stop_directive'
+            }
+    
+        # Check if stuck BEFORE choosing action
         if robot_pos and self._check_if_stuck(robot_pos):
             logger.error("[STUCK] Robot not moving, forcing aggressive turn")
             
