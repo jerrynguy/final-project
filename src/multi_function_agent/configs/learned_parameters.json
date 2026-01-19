@@ -4,8 +4,8 @@
   "adjustments": [
     {
       "parameter": "SAFE_ZONE",
-      "value": 0.9,
-      "reasoning": "Increasing SAFE_ZONE buffer to 0.9m allows for more conservative navigation and reduces the likelihood of false positives in open spaces",
+      "value": 0.8,
+      "reasoning": "Increasing SAFE_ZONE buffer to 0.8m allows for more conservative navigation and reduces the likelihood of false positives in open spaces",
       "confidence": 0.85,
       "applied_at": 1768742812.8805265
     }
