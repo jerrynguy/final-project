@@ -5,7 +5,7 @@ Trích xuất và format logs cho LLM phân tích.
 
 import logging
 import json
-from time import time
+import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from collections import deque

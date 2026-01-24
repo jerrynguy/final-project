@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": 1768742812.880615,
+  "last_updated": 1768792805.700317,
   "adjustments": [
     {
-      "parameter": "SAFE_ZONE",
-      "value": 0.8,
-      "reasoning": "Increasing SAFE_ZONE buffer to 0.8m allows for more conservative navigation and reduces the likelihood of false positives in open spaces",
-      "confidence": 0.85,
-      "applied_at": 1768742812.8805265
+      "parameter": "WARNING_ZONE",
+      "value": 0.5,
+      "reasoning": "Increasing WARNING_ZONE may allow the robot to navigate more efficiently, reducing the number of near misses and improving overall mission performance.",
+      "confidence": 0.8,
+      "applied_at": 1768792805.7002487
     }
   ]
 }
