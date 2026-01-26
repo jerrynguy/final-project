@@ -518,6 +518,41 @@ async def run_robot_control_loop(
             # ========================================
             mission_directive = mission_result['directive']
             
+            # Handle path_following mission with Nav2 waypoints
+            if (mission_controller.get_current_mission_type() == 'path_following' and
+                hasattr(mission_controller._mission_instance, 'should_send_nav2_goal')):
+                
+                if mission_controller._mission_instance.should_send_nav2_goal():
+                    next_wp = mission_controller._mission_instance.get_next_waypoint()
+                    
+                    if next_wp and robot_interface.nav2_interface:
+                        logger.info(
+                            f"[PATH] Sending waypoint {next_wp['index'] + 1}/"
+                            f"{mission_controller._mission_instance.state['total_waypoints']}: "
+                            f"({next_wp['x']:.2f}, {next_wp['y']:.2f})"
+                        )
+                        
+                        nav2_success = await robot_interface.send_nav2_goal(
+                            x=next_wp['x'],
+                            y=next_wp['y'],
+                            theta=next_wp['theta'],
+                            blocking=False
+                        )
+                        
+                        if nav2_success:
+                            mission_controller._mission_instance.mark_nav2_goal_sent()
+                            
+                            results["navigation_decisions"].append({
+                                'action': 'nav2_waypoint',
+                                'parameters': next_wp,
+                                'directive': mission_directive
+                            })
+                            
+                            await asyncio.sleep(0.1)
+                            continue  # Skip manual navigation for this iteration
+                        else:
+                            logger.warning(f"[PATH] Nav2 rejected waypoint {next_wp['index']}")
+            
             can_use_nav2 = (
                 nav2_ready and 
                 robot_pos is not None and

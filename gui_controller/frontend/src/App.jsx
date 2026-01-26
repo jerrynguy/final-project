@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Send, PlayCircle, Terminal, Wifi, WifiOff, Circle, Navigation, Radar, Map } from 'lucide-react';
+import TrajectoryViewer from './TrajectoryViewer';
 
 const API_URL = 'http://localhost:8000';
 
@@ -13,14 +14,14 @@ export default function RobotControlUI() {
   const [isConnected, setIsConnected] = useState(false);
   const [dockerStatus, setDockerStatus] = useState('checking');
   const [missionStatus, setMissionStatus] = useState('idle');
-  
-  // CHANGED: Add telemetry state
   const [telemetryActive, setTelemetryActive] = useState(false);
   const [odomData, setOdomData] = useState({ x: 0, y: 0, theta: 0, linear_vel: 0, angular_vel: 0 });
   const [scanData, setScanData] = useState({ ranges: [], angle_min: 0, angle_max: 0 });
   const [robotPath, setRobotPath] = useState([]); // Store trajectory
   const [showTelemetry, setShowTelemetry] = useState(false); // Toggle panel
-  
+  const [showTrajectoryViewer, setShowTrajectoryViewer] = useState(false);
+  const [isTrajectoryFullscreen, setIsTrajectoryFullscreen] = useState(false);
+  const [plannedPath, setPlannedPath] = useState(null); // For path_following missions
   const wsRef = useRef(null);
   const telemetryWsRef = useRef(null); // CHANGED: Separate WebSocket for telemetry
   const canvasRef = useRef(null); // For LIDAR radar
@@ -337,7 +338,6 @@ export default function RobotControlUI() {
               </div>
             </div>
 
-            {/* CHANGED: Telemetry toggle button */}
             <button
               onClick={toggleTelemetry}
               className={`px-4 py-2 rounded-lg font-semibold transition-all ${
@@ -347,6 +347,16 @@ export default function RobotControlUI() {
               }`}
             >
               {telemetryActive ? '📡 Stop Telemetry' : '📡 Start Telemetry'}
+            </button>
+            <button
+              onClick={() => setShowTrajectoryViewer(!showTrajectoryViewer)}
+              className={`px-4 py-2 rounded-lg font-semibold transition-all ${
+                showTrajectoryViewer 
+                  ? 'bg-purple-600 hover:bg-purple-500' 
+                  : 'bg-gray-600 hover:bg-gray-500'
+              }`}
+            >
+              {showTrajectoryViewer ? '🗺️ Hide Trajectory' : '🗺️ Show Trajectory'}
             </button>
           </div>
         </div>
@@ -506,6 +516,14 @@ export default function RobotControlUI() {
               </div>
             </div>
           </div>
+        )}
+        {showTrajectoryViewer && (
+          <TrajectoryViewer
+            odomData={odomData}
+            plannedPath={plannedPath}
+            isFullscreen={isTrajectoryFullscreen}
+            onToggleFullscreen={() => setIsTrajectoryFullscreen(!isTrajectoryFullscreen)}
+          />
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

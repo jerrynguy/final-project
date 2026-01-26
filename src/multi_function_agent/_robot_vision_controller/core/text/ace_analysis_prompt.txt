@@ -25,27 +25,58 @@ Suggest SAFE adjustments:
 - **Reasoning**: Why this fixes the issue
 - **Safety check**: Confirm it's within safe bounds
 
-## SAFETY CONSTRAINTS
+## PARAMETER ADJUSTMENT RULES
 
-You MUST respect these bounds:
-```
-CRITICAL_ABORT: [0.15m, 0.30m]
-WARNING_ZONE: [0.30m, 0.70m]
-SAFE_ZONE: [0.70m, 2.00m]
-RESUME_SAFE: [0.40m, 1.00m]
-escape_duration: [2.0s, 10.0s]
-```
+### ✅ ADJUSTABLE PARAMETERS (Behavioral):
 
-**DO NOT suggest:**
-- Values outside these bounds
-- Changes to max_linear_velocity (safety critical)
-- Disabling safety checks
-- Removing abort logic
+1. **Recovery Timing** - How long to execute maneuvers
+   - ESCAPE_DURATION: [1.5-3.0]s
+   - ROTATION_DURATION: [0.8-2.0]s  
+   - BACKUP_DURATION: [1.5-3.0]s
+
+2. **Movement Aggressiveness** - Speed vs safety
+   - CREEP_SPEED_MULTIPLIER: [0.3-0.7]
+   - TURN_AGGRESSIVENESS: [0.4-0.8] rad/s
+
+3. **Decision Weights** - Balance goals
+   - FRONTIER_PREFERENCE_WEIGHT: [0.5-1.0]
+   - STUCK_PENALTY_MULTIPLIER: [1.0-2.0]
+
+4. **Stuck Detection** - When to trigger recovery
+   - STUCK_THRESHOLD: [3-10] iterations
+   - STUCK_POSITION_TOLERANCE: [0.03-0.10]m
+   - ABORT_SPAM_THRESHOLD: [5-15]
+
+### ❌ DO NOT ADJUST (Distance Thresholds):
+
+**NEVER suggest changes to these - they are hardware-constrained:**
+- CRITICAL_ABORT (0.25m)
+- CRITICAL_ABORT_FRONT (0.22m)
+- CRITICAL_ABORT_SIDE (0.15m)
+- WARNING_ZONE (0.40m)
+- CAUTION_ZONE (0.50m)
+- SAFE_ZONE (0.70m)
+- RESUME_SAFE (0.50m)
+- ZONE_0_EMERGENCY (0.25m)
+- ZONE_1_PAUSE (0.40m)
+- ZONE_2_CAUTION (0.50m)
+- ZONE_3_COMFORTABLE (0.70m)
+- Any other distance threshold
+
+**WHY?** Distance thresholds determined by:
+- Robot width (0.28m for TurtleBot3)
+- Max velocity (0.22 m/s)
+- Deceleration distance
+- Hardware constraints
+
+Changing these breaks physics and causes MORE stuck situations.
+
+**FOCUS:** Improve timing, aggressiveness, decision weights.
+**NOT:** Geometry (distances are already optimal).
 
 ## OUTPUT FORMAT
 
 Return ONLY valid JSON (no markdown, no explanation):
-
 ```json
 {
   "diagnosis": "Brief description of the problem",
@@ -54,57 +85,118 @@ Return ONLY valid JSON (no markdown, no explanation):
   "death_pendulum_detected": true|false,
   "recommendations": [
     {
-      "parameter": "CRITICAL_ABORT",
-      "current_value": 0.20,
-      "suggested_value": 0.25,
-      "reasoning": "Current threshold too aggressive near walls, causing oscillation",
+      "parameter": "ROTATION_DURATION",
+      "current_value": 1.2,
+      "suggested_value": 1.8,
+      "reasoning": "Current rotation duration too short, causing oscillation. Increase by 50% to ensure robot fully clears obstacle arc.",
       "confidence": 0.85,
-      "expected_improvement": "50% reduction in abort rate near corners"
+      "expected_improvement": "Eliminate death pendulum at corners, reduce abort count by ~40%"
     }
   ],
   "additional_notes": "Any other observations or concerns"
 }
 ```
 
-## EXAMPLE ANALYSIS
+## EXAMPLES
 
-**Input:**
-```
-Mission: explore_area
-Total Aborts: 23
-Stuck Episodes: 3
-Death Pendulum: Oscillation detected (8 angle flips)
-Hotspot: Position (2.5, -1.3) - 15 aborts
-```
+### ✅ GOOD Recommendation (Behavioral):
 
-**Output:**
+**Scenario:** Death pendulum with 8 oscillations
 ```json
 {
-  "diagnosis": "Death pendulum near corner due to aggressive abort threshold",
-  "root_cause": "CRITICAL_ABORT=0.20m triggers too early when robot approaches walls at shallow angles, causing repeated left-right oscillation",
+  "diagnosis": "Death pendulum: Robot oscillates left-right 8 times at corner",
+  "root_cause": "ROTATION_DURATION too short (1.2s), robot makes tiny turns then re-aborts immediately",
   "severity": "high",
   "death_pendulum_detected": true,
   "recommendations": [
     {
-      "parameter": "CRITICAL_ABORT",
-      "current_value": 0.20,
-      "suggested_value": 0.25,
-      "reasoning": "Increase buffer near walls to prevent premature abort. 0.25m gives robot more space to maneuver before triggering emergency recovery.",
-      "confidence": 0.90,
-      "expected_improvement": "Eliminate oscillation at corners, reduce abort rate by ~60%"
-    },
-    {
-      "parameter": "escape_duration",
-      "current_value": 3.0,
-      "suggested_value": 5.0,
-      "reasoning": "Current escape window too short for robot to fully clear obstacle. Increasing to 5s allows more complete escape maneuvers.",
-      "confidence": 0.75,
-      "expected_improvement": "Reduce re-abort rate by ~40%"
+      "parameter": "ROTATION_DURATION",
+      "current_value": 1.2,
+      "suggested_value": 1.8,
+      "reasoning": "Increase rotation duration by 50% to ensure robot fully rotates out of obstacle arc before moving forward. Oscillation pattern shows current 1.2s insufficient - robot turns ~72° but needs ~110° to clear. At 0.6 rad/s, 1.8s provides ~108° rotation.",
+      "confidence": 0.88,
+      "expected_improvement": "Eliminate death pendulum at corners, reduce abort count by ~40%"
     }
-  ],
-  "additional_notes": "Consider adding directional hysteresis - once escaped from left side, bias away from left for next 2s to prevent immediate re-trigger."
+  ]
 }
 ```
+
+### ✅ GOOD Recommendation (Stuck Detection):
+
+**Scenario:** Stuck for 45s before recovery
+```json
+{
+  "diagnosis": "Stuck detection too slow, robot wastes 45s before recovery",
+  "root_cause": "STUCK_THRESHOLD too high (5 iterations), takes too long to confirm stuck state",
+  "severity": "medium",
+  "death_pendulum_detected": false,
+  "recommendations": [
+    {
+      "parameter": "STUCK_THRESHOLD",
+      "current_value": 5,
+      "suggested_value": 3,
+      "reasoning": "Reduce stuck detection threshold to trigger recovery faster. 3 iterations (~1.5s) is sufficient to confirm robot isn't moving, current 5 iterations wastes time.",
+      "confidence": 0.9,
+      "expected_improvement": "Reduce stuck detection time by 60%, faster recovery initiation"
+    }
+  ]
+}
+```
+
+### ✅ GOOD Recommendation (Exploration Speed):
+
+**Scenario:** Low coverage efficiency, no safety issues
+```json
+{
+  "diagnosis": "Exploration coverage below target (52% in 60s), too conservative",
+  "root_cause": "FRONTIER_PREFERENCE_WEIGHT too low (0.8), robot prioritizes safety over exploration when both are viable",
+  "severity": "low",
+  "death_pendulum_detected": false,
+  "recommendations": [
+    {
+      "parameter": "FRONTIER_PREFERENCE_WEIGHT",
+      "current_value": 0.8,
+      "suggested_value": 0.92,
+      "reasoning": "Mission shows zero safety incidents but low coverage. Increase frontier priority to encourage visiting new areas while maintaining abort count within acceptable range. Analysis shows robot has room to be more aggressive.",
+      "confidence": 0.82,
+      "expected_improvement": "Increase coverage efficiency by ~20%, reduce redundant area revisits"
+    }
+  ]
+}
+```
+
+### ❌ BAD Recommendation (Distance Threshold):
+
+**DO NOT DO THIS:**
+```json
+{
+  "diagnosis": "Too many aborts at corners",
+  "recommendations": [
+    {
+      "parameter": "CRITICAL_ABORT",
+      "current_value": 0.25,
+      "suggested_value": 0.30,
+      "reasoning": "Increase safety margin to avoid aborts"
+    }
+  ]
+}
+```
+
+**Why wrong:** Distance thresholds are hardware-constrained. Increasing CRITICAL_ABORT to 0.30m makes robot MORE conservative, causes MORE stuck situations, not fewer. The correct fix is behavioral (rotation duration, aggressiveness, etc.).
+
+### ❌ BAD Recommendation (Another Distance):
+```json
+{
+  "recommendations": [
+    {
+      "parameter": "WARNING_ZONE",
+      "suggested_value": 0.50
+    }
+  ]
+}
+```
+
+**Why wrong:** WARNING_ZONE is physics-constrained (deceleration distance). Already optimal at 0.40m.
 
 ## IMPORTANT REMINDERS
 
@@ -113,5 +205,6 @@ Hotspot: Position (2.5, -1.3) - 15 aborts
 3. **Validate Safety**: Double-check all values against bounds
 4. **Evidence-Based**: Reference specific log patterns in reasoning
 5. **JSON Only**: No markdown formatting, no code blocks
+6. **Behavioral Focus**: Adjust timing/aggressiveness/weights, NOT distances
 
 Now analyze the mission logs below and provide your diagnosis.

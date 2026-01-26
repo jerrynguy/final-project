@@ -62,7 +62,7 @@ class NavigationReasoner:
         self.last_position = None
         self.position_history = []
         self.stuck_counter = 0
-        self.STUCK_THRESHOLD = 5  # 5 iterations without movement
+        self.STUCK_THRESHOLD = SafetyThresholds.STUCK_THRESHOLD  # 5 iterations without movement
         
         logger.info(
             f"[NAVIGATION] Initialized 4-zone system:\n"
@@ -390,8 +390,8 @@ class NavigationReasoner:
                 'action': 'rotate_left',
                 'parameters': {
                     'linear_velocity': 0.0,
-                    'angular_velocity': 0.4,  # Slower rotation in tight space
-                    'duration': 1.2
+                    'angular_velocity': SafetyThresholds.TURN_LEFT_AGGRESSIVENESSLY,  # Slower rotation in tight space
+                    'duration': SafetyThresholds.ROTATION_DURATION
                 },
                 'confidence': 0.8,
                 'reason': 'critical_turn_to_best'
@@ -403,8 +403,8 @@ class NavigationReasoner:
                 'action': 'rotate_right',
                 'parameters': {
                     'linear_velocity': 0.0,
-                    'angular_velocity': -0.4,
-                    'duration': 1.2
+                    'angular_velocity': SafetyThresholds.TURN_RIGHT_AGGRESSIVENESSLY,  # Slower rotation in tight space
+                    'duration': SafetyThresholds.ROTATION_DURATION
                 },
                 'confidence': 0.8,
                 'reason': 'critical_turn_to_best'

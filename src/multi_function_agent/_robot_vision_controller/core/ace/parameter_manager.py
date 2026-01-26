@@ -36,14 +36,23 @@ class ParameterManager:
     
     # Safety bounds (IMMUTABLE)
     SAFETY_BOUNDS = {
-        'CRITICAL_ABORT': (0.15, 0.30),
-        'CRITICAL_ABORT_FRONT': (0.15, 0.30),
-        'CRITICAL_ABORT_SIDE': (0.10, 0.25),
-        'WARNING_ZONE': (0.30, 0.70),
-        'CAUTION_ZONE': (0.50, 1.20),
-        'SAFE_ZONE': (0.70, 2.00),
-        'RESUME_SAFE': (0.40, 1.00),
-        'escape_duration': (2.0, 10.0),
+        # Recovery Timing
+        'ESCAPE_DURATION': (1.5, 3.0),
+        'ROTATION_DURATION': (0.8, 2.0),
+        'BACKUP_DURATION': (1.5, 3.0),
+
+        # Movement Aggressiveness
+        'CREEP_SPEED_MULTIPLIER': (0.3, 0.7),
+        'TURN_AGGRESSIVENESS': (0.4, 0.8),
+        
+        # Decision Weights
+        'FRONTIER_PREFERENCE_WEIGHT': (0.5, 1.0),
+        'STUCK_PENALTY_MULTIPLIER': (1.0, 2.0),
+
+        # Stuck Detection
+        'STUCK_THRESHOLD': (3, 10),
+        'STUCK_POSITION_TOLERANCE': (0.03, 0.10),
+        'ABORT_SPAM_THRESHOLD': (5, 15),
     }
     
     # Parameters cho phép điều chỉnh

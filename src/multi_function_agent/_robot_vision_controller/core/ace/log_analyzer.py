@@ -10,6 +10,8 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from collections import deque
 
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
+
 logger = logging.getLogger(__name__)
 
 
@@ -399,9 +401,15 @@ class LogAnalyzer:
         from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
         
         return {
-            'CRITICAL_ABORT': SafetyThresholds.CRITICAL_ABORT,
-            'WARNING_ZONE': SafetyThresholds.WARNING_ZONE,
-            'SAFE_ZONE': SafetyThresholds.SAFE_ZONE,
-            'RESUME_SAFE': SafetyThresholds.RESUME_SAFE,
-            'HARDWARE_LIMIT': SafetyThresholds.HARDWARE_LIMIT,
+            'ESCAPE_DURATION': SafetyThresholds.ESCAPE_DURATION,
+            'ROTATION_DURATION': SafetyThresholds.ROTATION_DURATION,
+            'BACKUP_DURATION': SafetyThresholds.BACKUP_DURATION,
+            'CREEP_SPEED_MULTIPLIER': SafetyThresholds.CREEP_SPEED_MULTIPLIER,
+            'TURN_LEFT_AGGRESSIVENESSLY': SafetyThresholds.TURN_LEFT_AGGRESSIVENESSLY,
+            'TURN_RIGHT_AGGRESSIVENESSLY': SafetyThresholds.TURN_RIGHT_AGGRESSIVENESSLY,
+            'FRONTIER_PREFERENCE_WEIGHT': SafetyThresholds.FRONTIER_PREFERENCE_WEIGHT,
+            'STUCK_PENALTY_MULTIPLIER': SafetyThresholds.STUCK_PENALTY_MULTIPLIER,
+            'STUCK_THRESHOLD': SafetyThresholds.STUCK_THRESHOLD,
+            'STUCK_POSITION_TOLERANCE': SafetyThresholds.STUCK_POSITION_TOLERANCE,
+            'ABORT_SPAM_THRESHOLD': SafetyThresholds.ABORT_SPAM_THRESHOLD,
         }

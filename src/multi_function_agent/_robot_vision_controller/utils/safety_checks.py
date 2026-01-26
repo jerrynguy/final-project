@@ -73,6 +73,26 @@ class SafetyThresholds:
     # ===== RECOVERY BEHAVIOR =====
     TIGHT_CORNER_THRESHOLD = 0.25  # ← CHANGED: 0.3 → 0.25 (sync with ZONE_0)
     
+    # ===== BEHAVIORAL PARAMETERS (CHO ACE ADJUST) ===== 
+    # Recovery Timing
+    ESCAPE_DURATION = 2.0           # 1.5-3.0 seconds
+    ROTATION_DURATION = 1.2         # 0.8-2.0 seconds  
+    BACKUP_DURATION = 2.0           # 1.5-3.0 seconds
+
+    # Movement Aggressiveness
+    CREEP_SPEED_MULTIPLIER = 0.5    # 0.3-0.7
+    TURN_LEFT_AGGRESSIVENESSLY = 0.6       # 0.4-0.8 rad/s
+    TURN_RIGHT_AGGRESSIVENESSLY = -0.6      # 0.4-0.8 rad/s
+
+    # Decision Weights
+    FRONTIER_PREFERENCE_WEIGHT = 0.8  # 0.5-1.0
+    STUCK_PENALTY_MULTIPLIER = 1.5    # 1.0-2.0
+
+    # Stuck Detection  
+    STUCK_THRESHOLD = 5               # 3-10 iterations
+    STUCK_POSITION_TOLERANCE = 0.05   # 0.03-0.10 meters
+    ABORT_SPAM_THRESHOLD = 10         # 5-15 count
+
     @classmethod
     def get_critical_distance_for_direction(cls, angle_deg: float, is_moving_forward: bool) -> float:
         """

@@ -23,15 +23,34 @@ A composite mission has multiple STEPS executed sequentially or conditionally.
    Parameters: {duration: seconds, coverage: "full"|"partial"}
    Example: "Explore for 30 seconds"
 
-2. **follow_target**: Track and follow detected object
+2. **path_following**: Follow geometric parametric path
+   Parameters: {
+     path_type: "eclipse"|"spiral"|"figure8"|"circle",
+     semi_major: float (for eclipse, meters),
+     semi_minor: float (for eclipse, meters),
+     rotation: float (for eclipse, radians, optional),
+     radius: float (for circle, meters),
+     width: float (for figure8, meters),
+     height: float (for figure8, meters),
+     initial_radius: float (for spiral, meters),
+     growth_rate: float (for spiral),
+     turns: int (for spiral),
+     resolution: int (waypoints count, default: 100, optional)
+   }
+   Examples: 
+   - "Move in eclipse shape with major axis 3 meters and minor axis 2 meters"
+   - "Draw a spiral with 4 turns"
+   - "Move in figure 8 pattern"
+
+3. **follow_target**: Track and follow detected object
    Parameters: {target_class: "person"|"bottle"|etc, min_distance: meters, max_distance: meters}
    Example: "Follow the person at 2 meters distance"
 
-3. **patrol_laps**: Complete N laps in pattern
+4. **patrol_laps**: Complete N laps in pattern
    Parameters: {count: int, shape: "circle"|"square", radius: meters (optional)}
    Example: "Patrol 5 laps in a circle"
 
-4. **condition_check**: Evaluate condition and branch
+5. **condition_check**: Evaluate condition and branch
    Parameters: {
      condition: {
        type: "object_detected"|"timeout"|"distance_traveled",
@@ -43,7 +62,7 @@ A composite mission has multiple STEPS executed sequentially or conditionally.
    }
    Example: "If you see a bottle, approach it, otherwise continue exploring"
 
-5. **directional_command**: Simple movement directive
+6. **directional_command**: Simple movement directive
    Parameters: {direction: "left"|"right"|"forward"|"backward", distance: meters OR duration: seconds}
    Example: "Turn left", "Go forward 3 meters"
 

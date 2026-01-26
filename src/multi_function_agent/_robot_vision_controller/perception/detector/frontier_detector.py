@@ -371,6 +371,14 @@ class FrontierDetector:
             logger.debug("[FRONTIER] No valid frontiers available")
             return None
         
+        # Weight by FRONTIER_PREFERENCE
+        preference = SafetyThresholds.FRONTIER_PREFERENCE_WEIGHT
+        
+        # Adjust scores
+        for f in frontiers:
+            f.score *= preference
+
+        frontiers.sort(key=lambda f: f.score, reverse=True)
         best = frontiers[0]
         logger.info(
             f"[FRONTIER] Best frontier: {best.distance:.2f}m at {best.angle:.0f}°, "

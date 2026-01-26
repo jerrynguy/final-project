@@ -24,6 +24,7 @@ from multi_function_agent._robot_vision_controller.core.mission_controller.missi
 from multi_function_agent._robot_vision_controller.core.mission_controller.missions.patrol_mission import PatrolMission
 from multi_function_agent._robot_vision_controller.core.mission_controller.missions.explore_mission import ExploreMission
 from multi_function_agent._robot_vision_controller.core.mission_controller.missions.composite_mission import CompositeMission
+from multi_function_agent._robot_vision_controller.core.mission_controller.missions.path_following_mission import PathFollowingMission
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,8 @@ class MissionController:
         'follow_target': FollowMission,
         'patrol_laps': PatrolMission,
         'explore_area': ExploreMission,
-        'composite_mission': CompositeMission 
+        'composite_mission': CompositeMission,
+        'path_following': PathFollowingMission 
     }
     
     def __init__(self, mission: Mission):

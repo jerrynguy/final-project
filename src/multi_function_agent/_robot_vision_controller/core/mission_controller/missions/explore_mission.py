@@ -7,6 +7,7 @@ import logging
 from typing import Dict, List, Optional
 
 from multi_function_agent._robot_vision_controller.core.mission_controller.missions.base_mission import BaseMission
+from multi_function_agent._robot_vision_controller.utils.safety_checks import SafetyThresholds
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class ExploreMission(BaseMission):
     COVERAGE_LOG_INTERVAL = 10  # Log every N new areas
 
     # Stuck bailout threshold
-    STUCK_BAILOUT_THRESHOLD = 8.0  # Seconds - force complete if stuck too long
+    STUCK_BAILOUT_THRESHOLD = SafetyThresholds.STUCK_BAILOUT_THRESHOLD * 4  # Seconds - force complete if stuck too long
     
     def _initialize_state(self) -> Dict:
         """Initialize explore-specific state."""
