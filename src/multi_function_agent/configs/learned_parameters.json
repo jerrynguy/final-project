@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "last_updated": 1769649416.745731,
+  "adjustments": [
+    {
+      "parameter": "FRONTIER_PREFERENCE_WEIGHT",
+      "value": 0.92,
+      "reasoning": "Mission shows zero safety incidents but low coverage. Increase frontier priority to encourage visiting new areas while maintaining abort count within acceptable range. Analysis shows robot has room to be more aggressive.",
+      "confidence": 0.82,
+      "applied_at": 1769649416.7456164
+    }
+  ]
+}

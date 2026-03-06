@@ -92,6 +92,7 @@ class SafetyThresholds:
     STUCK_THRESHOLD = 5               # 3-10 iterations
     STUCK_POSITION_TOLERANCE = 0.05   # 0.03-0.10 meters
     ABORT_SPAM_THRESHOLD = 10         # 5-15 count
+    STUCK_BAILOUT_THRESHOLD = 30.0
 
     @classmethod
     def get_critical_distance_for_direction(cls, angle_deg: float, is_moving_forward: bool) -> float:
