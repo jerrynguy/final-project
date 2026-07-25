@@ -29,8 +29,24 @@ import math
 import time
 import sys
 import select
+import glob
+
+try:
+    import serial
+    PYSERIAL_AVAILABLE = True
+except ImportError:
+    PYSERIAL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+# ===== STM32 Motor Bridge Config =====
+# CANH BAO: MOTOR_MAX_LINEAR_VEL la gia tri UOC LUONG, CHUA do thuc te.
+# De hieu chinh: cho robot chay PWM=255 thang, do quang duong / thoi gian
+# (hoac dung encoder da co san trong firmware de tinh chinh xac hon).
+MOTOR_SERIAL_BAUD = 115200
+MOTOR_TRACK_WIDTH_M = 0.166       # da do: 16.6cm
+MOTOR_MAX_LINEAR_VEL = 0.3        # m/s, UOC LUONG - CAN HIEU CHINH
+MOTOR_PWM_MAX = 255
 
 # QoS Configuration
 def create_sensor_qos():
@@ -81,6 +97,10 @@ class ROS2Daemon:
         
         # Wait for Nav2 server
         self._wait_for_nav2_server()
+
+        # STM32 motor bridge
+        self.motor_serial = None
+        self._init_motor_serial()
     
     def _wait_for_nav2_server(self, timeout=5.0):
         """Wait for Nav2 action server."""
@@ -89,6 +109,57 @@ class ROS2Daemon:
             'type': 'nav2_server',
             'available': server_available
         })
+
+    # STM32 Motor Bridge
+    def _find_motor_port(self):
+        """Auto-detect CH340K USB-serial port (giong motor_test.py)."""
+        candidates = glob.glob("/dev/ttyUSB*")
+        if not candidates:
+            return None
+        return candidates[0]
+
+    def _init_motor_serial(self):
+        """Mo ket noi serial toi STM32 (khong chan neu that bai)."""
+        if not PYSERIAL_AVAILABLE:
+            logger.error("[MOTOR] pyserial chua duoc cai (pip3 install pyserial)")
+            return
+
+        port = self._find_motor_port()
+        if port is None:
+            logger.warning("[MOTOR] Khong tim thay /dev/ttyUSB* - motor bridge tat")
+            return
+
+        try:
+            self.motor_serial = serial.Serial(port, MOTOR_SERIAL_BAUD, timeout=0.05)
+            time.sleep(2.0)  # cho STM32 reset xong sau khi mo cong serial
+            self.motor_serial.reset_input_buffer()
+            logger.info(f"[MOTOR] Da ket noi STM32 tai {port}")
+        except Exception as e:
+            logger.error(f"[MOTOR] Khong mo duoc serial {port}: {e}")
+            self.motor_serial = None
+
+    def _cmd_vel_to_pwm(self, linear: float, angular: float):
+        """Chuyen (linear m/s, angular rad/s) -> (pwm_left, pwm_right)."""
+        half_track = MOTOR_TRACK_WIDTH_M / 2.0
+        v_left = linear - angular * half_track
+        v_right = linear + angular * half_track
+
+        pwm_left = int(max(-MOTOR_PWM_MAX, min(MOTOR_PWM_MAX,
+            (v_left / MOTOR_MAX_LINEAR_VEL) * MOTOR_PWM_MAX)))
+        pwm_right = int(max(-MOTOR_PWM_MAX, min(MOTOR_PWM_MAX,
+            (v_right / MOTOR_MAX_LINEAR_VEL) * MOTOR_PWM_MAX)))
+
+        return pwm_left, pwm_right
+
+    def _send_motor_pwm(self, pwm_left: int, pwm_right: int):
+        """Gui lenh PWM xuong STM32 qua serial."""
+        if self.motor_serial is None:
+            return
+        try:
+            line = f"M {pwm_left} {pwm_right}\n"
+            self.motor_serial.write(line.encode())
+        except Exception as e:
+            logger.error(f"[MOTOR] Gui lenh that bai: {e}")
     
     # Sensor Callbacks    
     def lidar_callback(self, msg):
@@ -212,12 +283,16 @@ class ROS2Daemon:
         return self.last_cmd
     
     def publish_cmd_vel(self):
-        """Publish velocity command at fixed rate."""
+        """Publish velocity command at fixed rate + forward to STM32."""
         linear, angular = self.read_cmd_queue()
         msg = Twist()
         msg.linear.x = linear
         msg.angular.z = angular
         self.cmd_vel_pub.publish(msg)
+
+        # STM32 motor bridge
+        pwm_left, pwm_right = self._cmd_vel_to_pwm(linear, angular)
+        self._send_motor_pwm(pwm_left, pwm_right)
     
     # Nav2 Integration    
     def send_nav2_goal(self, x, y, theta):
@@ -344,6 +419,12 @@ class ROS2Daemon:
         except KeyboardInterrupt:
             pass
         finally:
+            if self.motor_serial:
+                try:
+                    self._send_motor_pwm(0, 0)
+                    self.motor_serial.close()
+                except Exception:
+                    pass
             self.node.destroy_node()
             rclpy.shutdown()
     
