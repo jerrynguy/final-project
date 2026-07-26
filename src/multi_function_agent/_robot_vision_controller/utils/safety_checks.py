@@ -25,7 +25,7 @@ class SafetyThresholds:
     """
     
     # ===== HARDWARE PROTECTION =====
-    HARDWARE_LIMIT = 0.12  # Physical collision (unchanged)
+    HARDWARE_LIMIT = 0.15  # Physical collision (unchanged)
     
     # ===== CRITICAL ABORT =====
     CRITICAL_ABORT = 0.25  # Emergency stop (unchanged)
@@ -61,8 +61,8 @@ class SafetyThresholds:
     LATERAL_PREFERENCE_THRESHOLD = 0.40  
     
     # ===== VELOCITY LIMITS =====
-    MAX_SAFE_LINEAR_VEL = 0.6
-    MAX_SAFE_ANGULAR_VEL = 2.5
+    MAX_SAFE_LINEAR_VEL = 0.15
+    MAX_SAFE_ANGULAR_VEL = 0.6
     
     # ===== DIRECTIONAL ARCS =====
     FRONT_ARC_HALF_ANGLE = 60

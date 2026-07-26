@@ -24,8 +24,8 @@ functions:
     control_mode: "autonomous"
     navigation_goal: "explore"
     safety_level: "medium"
-    max_speed: 0.6
-    exploration_speed_boost: 1.5  # Multiplier for explore mode (1.5x = medium safety → near-low safety speed)
+    max_speed: 0.1
+    exploration_speed_boost: 1.0  # Multiplier for explore mode (1.5x = medium safety → near-low safety speed)
     description: "Real-time robot vision navigation and control system"
 
     ros:
@@ -54,11 +54,11 @@ functions:
     # Robot Controller Configuration
     min_command_interval: 0.05
     connection_timeout: 3.0
-    max_linear_velocity: 0.6
-    max_angular_velocity: 2.5
+    max_linear_velocity: 0.1
+    max_angular_velocity: 0.5
     
     # Nav2 Configuration
-    use_nav2: true
+    use_nav2: false
     nav2_timeout: 60.0
     nav2_goal_tolerance: 0.2
     nav2_angle_tolerance: 0.1

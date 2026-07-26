@@ -31,6 +31,7 @@ src/multi_function_agent/_robot_vision_controller/core/parser/composite_mission_
 src/multi_function_agent/_robot_vision_controller/core/parser/goal_parser.py
 src/multi_function_agent/_robot_vision_controller/core/ros2_node/ros2_daemon_script.py
 src/multi_function_agent/_robot_vision_controller/core/ros2_node/ros2_node.py
+src/multi_function_agent/_robot_vision_controller/core/ros2_node/teleop_keyboard.py
 src/multi_function_agent/_robot_vision_controller/navigation/nav2_interface.py
 src/multi_function_agent/_robot_vision_controller/navigation/navigation_reasoner.py
 src/multi_function_agent/_robot_vision_controller/navigation/robot_controller_interface.py

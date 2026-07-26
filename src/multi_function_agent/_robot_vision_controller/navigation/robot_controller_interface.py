@@ -203,7 +203,7 @@ class RobotControllerInterface(Node):
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
                 
-                func_config = config.get('functions', {}).get('_robot_vision_controller', {})
+                func_config = config.get('functions', {}).get('robot_vision_controller', {})
                 
                 return {
                     # Robot controller
