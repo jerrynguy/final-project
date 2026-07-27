@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": 1769649416.745731,
+  "last_updated": 1785123953.2618566,
   "adjustments": [
     {
-      "parameter": "FRONTIER_PREFERENCE_WEIGHT",
-      "value": 0.92,
-      "reasoning": "Mission shows zero safety incidents but low coverage. Increase frontier priority to encourage visiting new areas while maintaining abort count within acceptable range. Analysis shows robot has room to be more aggressive.",
-      "confidence": 0.82,
-      "applied_at": 1769649416.7456164
+      "parameter": "CREEP_SPEED_MULTIPLIER",
+      "value": 0.6,
+      "reasoning": "Mission shows zero safety incidents but low coverage. Increase creep speed multiplier to encourage faster exploration while maintaining abort count within acceptable range. Analysis shows robot has room to be more aggressive.",
+      "confidence": 0.85,
+      "applied_at": 1785123953.2615833
     }
   ]
 }

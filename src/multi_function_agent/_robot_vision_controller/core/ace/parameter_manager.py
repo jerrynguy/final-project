@@ -193,7 +193,15 @@ class ParameterManager:
         Format:
         {
           "version": 1,
-          "last_updated": timestamp,
+          "last_updated": time.time(),
+          "history": [
+            {
+              "parameter": a.parameter,
+              "value": a.new_value,
+              "confidence": a.confidence,
+              "applied_at": a.applied_at}
+            for a in self.adjustment_history
+          ],
           "adjustments": [
             {
               "parameter": "CRITICAL_ABORT",
@@ -276,7 +284,16 @@ class ParameterManager:
                 
                 old_value = getattr(SafetyThresholds, param_name, 0.0)
                 setattr(SafetyThresholds, param_name, new_value)
-                
+
+                self.adjustment_history.append(
+                    param_name=param_name,
+                    old_value=old_value,
+                    new_value=new_value,
+                    reasoning=adj_data.get('reasoning', 'No reason provided'),
+                    confidence=adj_data.get('confidence', 0.0),
+                    applied_at=adj_data.get('applied_at', 0.0)
+                )
+
                 logger.info(
                     f"[PARAM MGR] ✅ Loaded: {param_name} "
                     f"{old_value:.3f} → {new_value:.3f}"
